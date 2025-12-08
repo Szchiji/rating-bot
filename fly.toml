@@ -1,5 +1,5 @@
 # 2025 年最稳的 fly.toml（直接复制）
-app = "你的应用名"        # ←←← 改成你自己的名字！比如 rating-bot-1234、rating-bot-abc 都行
+app = "rating-bot-abcd"        # ←←← 改成你自己的名字！比如 rating-bot-1234、rating-bot-abc 都行
 
 primary_region = "hkg"
 
