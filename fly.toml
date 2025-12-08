@@ -1,0 +1,26 @@
+app = "rating-bot-ABC"   # ←←← 把这里改成你喜欢的英文名字，比如 rating-bot-abc
+
+[build]
+
+[mounts]
+source = "data"
+destination = "/data"
+
+[[services]]
+  http_checks = []
+  internal_port = 8080
+  protocol = "tcp"
+  script_checks = []
+  [services.concurrency]
+    hard_limit = 25
+    soft_limit = 20
+    type = "connections"
+
+  [[services.ports]]
+    force_https = true
+    handlers = ["http"]
+    port = 80
+
+  [[services.ports]]
+    handlers = ["tls", "http"]
+    port = 443
