@@ -1,23 +1,20 @@
-app = "rating-bot-ABC"   # ←←← 把这里改成你喜欢的英文名字，比如 rating-bot-abc
+# 2025 年最稳的 fly.toml（直接复制）
+app = "你的应用名"        # ←←← 改成你自己的名字！比如 rating-bot-1234、rating-bot-abc 都行
+
+primary_region = "hkg"
 
 [build]
+  image = "python:3.12-slim"
 
 [mounts]
-source = "data"
-destination = "/data"
+  source = "data"
+  destination = "/data"
 
 [[services]]
-  http_checks = []
   internal_port = 8080
   protocol = "tcp"
-  script_checks = []
-  [services.concurrency]
-    hard_limit = 25
-    soft_limit = 20
-    type = "connections"
 
   [[services.ports]]
-    force_https = true
     handlers = ["http"]
     port = 80
 
