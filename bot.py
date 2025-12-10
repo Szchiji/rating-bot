@@ -10,7 +10,6 @@ from aiogram.filters import Command
 from aiogram.types import Message, CallbackQuery, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-# 自动读取环境变量（永不改代码）
 TOKEN = os.environ['BOT_TOKEN']
 OWNER_ID = int(os.environ.get('OWNER_ID', '0'))
 
@@ -39,49 +38,38 @@ def init_db():
 
 init_db()
 
-# ==================== 永久保存管理员 + 授权群 ====================
+# ==================== 永久保存 ====================
 def load_admins():
-    conn = sqlite3.connect(DB)
-    c = conn.cursor()
+    conn = sqlite3.connect(DB); c = conn.cursor()
     c.execute("SELECT user_id FROM admins")
-    admins = {row[0] for row in c.fetchall()}
-    conn.close()
-    return admins
+    return {row[0] for row in c.fetchall()}
 
 def load_groups():
-    conn = sqlite3.connect(DB)
-    c = conn.cursor()
+    conn = sqlite3.connect(DB); c = conn.cursor()
     c.execute("SELECT chat_id FROM allowed_chats")
-    groups = {row[0] for row in c.fetchall()}
-    conn.close()
-    return groups
+    return {row[0] for row in c.fetchall()}
 
 def save_admin(uid):
-    conn = sqlite3.connect(DB)
-    c = conn.cursor()
+    conn = sqlite3.connect(DB); c = conn.cursor()
     c.execute("INSERT OR IGNORE INTO admins VALUES (?)", (uid,))
-    conn.commit()
-    conn.close()
+    conn.commit(); conn.close()
 
 def save_group(gid):
-    conn = sqlite3.connect(DB)
-    c = conn.cursor()
+    conn = sqlite3.connect(DB); c = conn.cursor()
     c.execute("INSERT OR IGNORE INTO allowed_chats VALUES (?)", (gid,))
-    conn.commit()
-    conn.close()
+    conn.commit(); conn.close()
 
-# 启动时加载（关键！重启不丢）
 ADMIN_IDS = load_admins()
 ALLOWED_CHAT_IDS = load_groups()
-if OWNER_ID and OWNER_ID != 0:
+if OWNER_ID:
     ADMIN_IDS.add(OWNER_ID)
-    save_admin(OWNER_ID)  # 确保你永远在数据库里
+    save_admin(OWNER_ID)
 
-PATTERN = re.compile(r"@?([\w\u4e00-\u9fa5]{2,32})")
+PATTERN = re.compile(r"@?([\w\u4e00-\u9fa5\w]{2,32})")
 
-# ==================== 防刷屏：只保留最新一条 ====================
-LAST_CARD_MSG_ID = {}   # {chat_id: message_id}
-LAST_TOP_MSG_ID = {}    # {chat_id: message_id}
+# ==================== 防刷屏 ====================
+LAST_CARD_MSG_ID = {}
+LAST_TOP_MSG_ID = {}
 
 async def delete_old(chat_id: int, msg_dict: dict):
     if chat_id in msg_dict:
@@ -91,32 +79,32 @@ async def delete_old(chat_id: int, msg_dict: dict):
             pass
         del msg_dict[chat_id]
 
-# ==================== 信誉卡（显示用户名 + 投票者ID） ====================
-async def send_card(chat_id: int, username: str, r: int, b: int, net: int, voter_id: int):
+# ==================== 信誉卡（只显示被投票者ID） ====================
+async def send_card(chat_id: int, username: str, r: int, b: int, net: int, target_id: int):
     await delete_old(chat_id, LAST_CARD_MSG_ID)
-    
     text = f"<b>@{username}</b>\n"
-    text += f"投票者 ID: <code>{voter_id}</code>\n\n"
+    text += f"用户 ID: <code>{target_id}</code>\n\n"
     text += f"推荐 {r}　拉黑 {b}\n"
     text += f"净值 <b>{net:+d}</b>"
-    
     sent = await bot.send_message(chat_id, text, reply_markup=kb(username))
     LAST_CARD_MSG_ID[chat_id] = sent.message_id
 
 # ==================== 群内 @ 人 ====================
 @router.message(F.chat.type.in_({"group", "supergroup"}))
 async def group(msg: Message):
-    if msg.chat.id not in ALLOWED_CHAT_IDS:
-        return
-    if not msg.text or msg.text.startswith('/'):
-        return
+    if msg.chat.id not in ALLOWED_CHAT_IDS: return
+    if not msg.text or msg.text.startswith('/'): return
     for raw in PATTERN.findall(msg.text)[:3]:
         u = raw.lstrip("@").lower()
-        if len(u) < 3 or u.isdigit():
-            continue
+        if len(u) < 3 or u.isdigit(): continue
         r, b = get_stats(msg.chat.id, u)
         net = r - b
-        await send_card(msg.chat.id, u, r, b, net, msg.from_user.id)
+        try:
+            user = await bot.get_chat(u)
+            target_id = user.id
+        except:
+            target_id = "未知"
+        await send_card(msg.chat.id, u, r, b, net, target_id)
 
 # ==================== 投票（点击后立即刷新） ====================
 @router.callback_query()
@@ -125,11 +113,9 @@ async def vote(cb: CallbackQuery):
     if chat_id not in ALLOWED_CHAT_IDS:
         await cb.answer("本群未授权", show_alert=True)
         return
-    if "_" not in cb.data:
-        return
+    if "_" not in cb.data: return
     typ, u = cb.data.split("_", 1)
     u = u.lower()
-    
     if not can_vote(chat_id, cb.from_user.id, u, typ):
         await cb.answer("24h内只能投一次", show_alert=True)
         return
@@ -139,18 +125,27 @@ async def vote(cb: CallbackQuery):
     net = r - b
     
     await delete_old(chat_id, LAST_CARD_MSG_ID)
-    await send_card(chat_id, u, r, b, net, cb.from_user.id)
+    
+    try:
+        user = await bot.get_chat(u)
+        target_id = user.id
+    except:
+        target_id = "未知"
+    
+    await send_card(chat_id, u, r, b, net, target_id)
     await cb.answer("已推荐" if typ == "rec" else "已拉黑")
 
-# ==================== /top 排行榜（100% 出榜 + 自动删旧） ====================
+# ==================== /top 排行榜（100% 出榜，永不失败） ====================
 @router.message(Command("top"))
 async def top(msg: Message):
     chat_id = msg.chat.id
     if chat_id not in ALLOWED_CHAT_IDS:
         return
     
+    # 删除旧榜
     await delete_old(chat_id, LAST_TOP_MSG_ID)
     
+    # 读取数据
     conn = sqlite3.connect(DB)
     c = conn.cursor()
     c.execute("SELECT username, rec, black, (rec-black) as net FROM ratings WHERE chat_id=? ORDER BY net DESC, rec DESC LIMIT 20", (chat_id,))
@@ -164,13 +159,12 @@ async def top(msg: Message):
     
     lines = ["<b>  本群信誉排行榜 TOP20  </b>\n"]
     for i, (u, r, b, net) in enumerate(rows, 1):
-        medal = "1st" if i == 1 else "2nd" if i == 2 else "3rd" if i == 3 else f"{i:>2}."
-        lines.append(f"{medal} @{u}  +{r} -{b} → <b>{net:+d}</b>\n")
+        lines.append(f"{i:>2}. @{u}  +{r} -{b} → <b>{net:+d}</b>\n")
     
     sent = await msg.reply("\n".join(lines))
     LAST_TOP_MSG_ID[chat_id] = sent.message_id
 
-# ==================== 私聊面板（含封禁+清理） ====================
+# ==================== 私聊面板（保持不变） ====================
 @router.message(F.chat.type == "private")
 async def private_handler(msg: Message):
     if msg.from_user.id not in ADMIN_IDS:
@@ -185,8 +179,7 @@ async def private_handler(msg: Message):
             ALLOWED_CHAT_IDS.add(gid)
             save_group(gid)
             await msg.reply(f"已永久授权群：{gid}")
-        except:
-            await msg.reply("用法：/add -100xxxxxxxxxx")
+        except: await msg.reply("用法：/add -100xxxxxxxxxx")
 
     elif text.startswith("/addadmin "):
         try:
@@ -194,8 +187,7 @@ async def private_handler(msg: Message):
             ADMIN_IDS.add(uid)
             save_admin(uid)
             await msg.reply(f"已成功添加管理员：{uid}")
-        except:
-            await msg.reply("用法：/addadmin 123456789")
+        except: await msg.reply("用法：/addadmin 123456789")
 
     elif text.startswith("/del "):
         try:
@@ -206,8 +198,7 @@ async def private_handler(msg: Message):
                 c.execute("DELETE FROM allowed_chats WHERE chat_id=?", (gid,))
                 conn.commit(); conn.close()
                 await msg.reply(f"已永久删除授权群：{gid}")
-        except:
-            await msg.reply("用法：/del -100xxxxxxxxxx")
+        except: await msg.reply("用法：/del -100xxxxxxxxxx")
 
     elif text.startswith("/deladmin "):
         try:
@@ -218,8 +209,7 @@ async def private_handler(msg: Message):
                 c.execute("DELETE FROM admins WHERE user_id=?", (uid,))
                 conn.commit(); conn.close()
                 await msg.reply(f"已移除管理员：{uid}")
-        except:
-            await msg.reply("用法：/deladmin 123456789")
+        except: await msg.reply("用法：/deladmin 123456789")
 
     elif text.startswith("/banuser "):
         username = text.split(maxsplit=1)[1].lstrip("@")
@@ -227,8 +217,7 @@ async def private_handler(msg: Message):
             user = await bot.get_chat(username)
             await bot.ban_chat_member(msg.chat.id, user.id)
             await msg.reply(f"已永久封禁 @{username}")
-        except:
-            await msg.reply("封禁失败（用户名错误或不在群）")
+        except: await msg.reply("封禁失败")
 
     elif text.startswith("/clearuser "):
         username = text.split(maxsplit=1)[1].lstrip("@").lower()
@@ -246,9 +235,9 @@ async def private_handler(msg: Message):
     elif text in ["/start", "/help"]:
         await msg.reply(
             "<b>狼猎信誉机器人控制面板</b>\n\n"
-            "群管理：\n/add -100xxx → 添加授权群\n/del -100xxx → 删除授权群\n/list → 查看已授权群\n\n"
-            "管理员：\n/addadmin ID → 添加管理员\n/deladmin ID → 删除管理员\n/admins → 查看管理员\n\n"
-            "其他：\n/banuser @xxx → 封禁用户\n/clearuser @xxx → 清理用户记录"
+            "群管理：\n/add /del /list\n"
+            "管理员：\n/addadmin /deladmin /admins\n"
+            "其他：\n/banuser @xxx → 封禁\n/clearuser @xxx → 清理记录"
         )
 
 # ==================== 数据库函数 ====================
@@ -284,7 +273,6 @@ def kb(user):
     )
     return b.as_markup()
 
-# ==================== 启动 ====================
 async def main():
     print("狼猎信誉机器人 - 终极完美版已启动")
     await dp.start_polling(bot)
