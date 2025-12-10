@@ -6,11 +6,11 @@ from aiogram.enums import ParseMode
 from aiogram.types import Message, CallbackQuery, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-# 从环境变量获取
+# 从环境变量获取配置
 TOKEN = os.environ.get('BOT_TOKEN')
 OWNER_ID = int(os.environ.get('OWNER_ID', '0'))
 
-# === 关键：适配 Railway Volume ===
+# === 数据库路径适配 Railway Volume ===
 DATA_DIR = "/data" if os.path.exists("/data") else "."
 DB = os.path.join(DATA_DIR, "ratings.db")
 
@@ -19,7 +19,7 @@ dp = Dispatcher()
 router = Router()
 dp.include_router(router)
 
-# 确保数据库存在（Web 端也会做，这里双重保险）
+# 确保数据库存在（与 web.py 共享）
 def init_db():
     conn = sqlite3.connect(DB)
     c = conn.cursor()
@@ -35,36 +35,31 @@ def init_db():
 
 init_db()
 
-# 辅助函数
+# 辅助函数：加载数据、保存数据
 def load_admins():
     conn = sqlite3.connect(DB); c = conn.cursor()
     c.execute("SELECT user_id FROM admins")
-    s = {row[0] for row in c.fetchall()}
-    conn.close()
+    s = {row[0] for row in c.fetchall()}; conn.close()
     return s
 
 def load_groups():
     conn = sqlite3.connect(DB); c = conn.cursor()
     c.execute("SELECT chat_id FROM allowed_chats")
-    s = {row[0] for row in c.fetchall()}
-    conn.close()
+    s = {row[0] for row in c.fetchall()}; conn.close()
     return s
 
 def save_admin(uid):
     conn = sqlite3.connect(DB); c = conn.cursor()
-    c.execute("INSERT OR IGNORE INTO admins VALUES (?)", (uid,))
-    conn.commit(); conn.close()
+    c.execute("INSERT OR IGNORE INTO admins VALUES (?)", (uid,)); conn.commit(); conn.close()
 
 def save_group(gid):
     conn = sqlite3.connect(DB); c = conn.cursor()
-    c.execute("INSERT OR IGNORE INTO allowed_chats VALUES (?)", (gid,))
-    conn.commit(); conn.close()
+    c.execute("INSERT OR IGNORE INTO allowed_chats VALUES (?)", (gid,)); conn.commit(); conn.close()
 
 ADMIN_IDS = load_admins()
 ALLOWED_CHAT_IDS = load_groups()
 if OWNER_ID:
-    ADMIN_IDS.add(OWNER_ID)
-    save_admin(OWNER_ID)
+    ADMIN_IDS.add(OWNER_ID); save_admin(OWNER_ID)
 
 PATTERN = re.compile(r"@?([\w\u4e00-\u9fa5]{2,32})")
 LAST_CARD_MSG_ID = {}
@@ -106,8 +101,7 @@ def add_vote(chat, voter, user, typ):
     c.execute(f"INSERT INTO ratings (chat_id,username,{col}) VALUES (?,?,1) "
               f"ON CONFLICT(chat_id,username) DO UPDATE SET {col}={col}+1", (chat, user))
     c.execute("INSERT OR REPLACE INTO votes VALUES (?,?,?,?,?)", 
-              (chat, voter, user, typ, datetime.now()))
-    conn.commit(); conn.close()
+              (chat, voter, user, typ, datetime.now())); conn.commit(); conn.close()
 
 def get_stats(chat, user):
     conn = sqlite3.connect(DB); c = conn.cursor()
@@ -121,25 +115,26 @@ def kb(user):
           InlineKeyboardButton(text="拉黑", callback_data=f"black_{user}"))
     return b.as_markup()
 
-# === 核心逻辑 ===
+# === 群组消息处理：包含黑名单检查 ===
 @router.message(F.chat.type.in_({"group", "supergroup"}))
 async def group(msg: Message):
     if msg.chat.id not in ALLOWED_CHAT_IDS: return
     if not msg.text or msg.text.startswith('/'): return
     
-    # 检查发送者是否在黑名单
+    # 检查发送者是否在黑名单 (banned_users)
     if msg.from_user.username:
         conn = sqlite3.connect(DB); c = conn.cursor()
         c.execute("SELECT 1 FROM banned_users WHERE username=?", (msg.from_user.username.lower(),))
-        is_banned = c.fetchone()
-        conn.close()
+        is_banned = c.fetchone(); conn.close()
         if is_banned:
             try:
+                # 尝试将用户踢出群组
                 await bot.ban_chat_member(msg.chat.id, msg.from_user.id)
                 await msg.delete()
                 return
             except: pass
 
+    # 提取 @用户名 并发送信誉卡
     for raw in PATTERN.findall(msg.text)[:3]:
         u = raw.lstrip("@").lower()
         if len(u) < 3 or u.isdigit(): continue
@@ -156,8 +151,7 @@ async def vote(cb: CallbackQuery):
     if chat_id not in ALLOWED_CHAT_IDS:
         await cb.answer("本群未授权", show_alert=True); return
     if "_" not in cb.data: return
-    typ, u = cb.data.split("_", 1)
-    u = u.lower()
+    typ, u = cb.data.split("_", 1); u = u.lower()
     if not can_vote(chat_id, cb.from_user.id, u, typ):
         await cb.answer("24h内只能投一次", show_alert=True); return
     
@@ -171,6 +165,7 @@ async def vote(cb: CallbackQuery):
     await send_card(chat_id, u, r, b, r-b, target_id)
     await cb.answer("投票成功")
 
+# === 私聊管理员面板：全局操作 ===
 @router.message(F.chat.type == "private")
 async def private_handler(msg: Message):
     if msg.from_user.id not in ADMIN_IDS:
@@ -181,33 +176,33 @@ async def private_handler(msg: Message):
         return
 
     text = msg.text.strip()
+    
     if text.startswith("/add "):
         try:
-            gid = int(text.split()[1])
-            ALLOWED_CHAT_IDS.add(gid); save_group(gid)
+            gid = int(text.split()[1]); ALLOWED_CHAT_IDS.add(gid); save_group(gid)
             await msg.reply(f"✅ 已授权: {gid}")
         except: await msg.reply("用法: /add -100xxx")
     
     elif text.startswith("/del "):
+        # 移除授权群
         try:
             gid = int(text.split()[1])
             if gid in ALLOWED_CHAT_IDS:
                 ALLOWED_CHAT_IDS.remove(gid)
                 conn = sqlite3.connect(DB); c = conn.cursor()
-                c.execute("DELETE FROM allowed_chats WHERE chat_id=?", (gid,))
-                conn.commit(); conn.close()
+                c.execute("DELETE FROM allowed_chats WHERE chat_id=?", (gid,)); conn.commit(); conn.close()
                 await msg.reply(f"🗑️ 已删除: {gid}")
         except: await msg.reply("用法: /del -100xxx")
     
     elif text.startswith("/banuser "):
+        # 全局封禁用户 (写入 banned_users 表并尝试踢出所有群)
         try:
             u = text.split(maxsplit=1)[1].lstrip("@").lower()
             conn = sqlite3.connect(DB); c = conn.cursor()
-            c.execute("INSERT OR IGNORE INTO banned_users VALUES (?)", (u,))
-            conn.commit(); conn.close()
-            # 尝试踢出
+            c.execute("INSERT OR IGNORE INTO banned_users VALUES (?)", (u,)); conn.commit(); conn.close()
+            
             count = 0
-            try:
+            try: # 尝试踢出所有授权群
                 user_obj = await bot.get_chat(u)
                 for gid in ALLOWED_CHAT_IDS:
                     try: await bot.ban_chat_member(gid, user_obj.id); count += 1
@@ -217,19 +212,27 @@ async def private_handler(msg: Message):
         except: await msg.reply("用法: /banuser @name")
     
     elif text.startswith("/clearuser "):
+        # 全局清理用户所有记录
         try:
             u = text.split(maxsplit=1)[1].lstrip("@").lower()
             conn = sqlite3.connect(DB); c = conn.cursor()
             c.execute("DELETE FROM ratings WHERE username=?", (u,))
-            c.execute("DELETE FROM votes WHERE username=?", (u,))
-            conn.commit(); conn.close()
+            c.execute("DELETE FROM votes WHERE username=?", (u,)); conn.commit(); conn.close()
             await msg.reply(f"🧹 已清理 @{u} 所有记录")
         except: await msg.reply("用法: /clearuser @name")
+        
+    elif text.startswith("/setwelcome "):
+        new_text = text[len("/setwelcome "):]
+        conn = sqlite3.connect(DB); c = conn.cursor()
+        c.execute("INSERT OR REPLACE INTO bot_settings VALUES ('welcome', ?)", (new_text,)); conn.commit(); conn.close()
+        await msg.reply(f"📝 欢迎词已更新！\n\n预览：\n{new_text}")
 
     elif text in ["/start", "/help"]:
-        await msg.reply("管理面板:\n/add /del /banuser /clearuser")
+        await msg.reply("<b>管理面板:</b>\n/add /del : 授权群管理\n/banuser /clearuser : 用户操作\n/setwelcome : 修改欢迎词")
 
 async def main():
+    print("狼猎信誉机器人已启动")
+    # 开始接收消息
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
