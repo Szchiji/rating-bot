@@ -9,14 +9,21 @@ app.secret_key = os.environ.get("SECRET_KEY", "wolfhunter2025_default_key")
 
 OWNER_ID = int(os.environ.get("OWNER_ID", "0"))
 DATABASE_URL = os.environ.get('DATABASE_URL')
+DB_INITIALIZED = False # <--- 新增全局变量，跟踪初始化状态
 
 def get_db_connection():
     """返回 PostgreSQL 数据库连接对象"""
     if not DATABASE_URL:
+        # 如果 DATABASE_URL 未设置，抛出异常，让上层函数捕获
         raise ValueError("DATABASE_URL environment variable is not set!")
     return psycopg2.connect(DATABASE_URL)
 
 def init_db():
+    global DB_INITIALIZED
+    
+    if DB_INITIALIZED:
+        return
+
     conn = get_db_connection()
     c = conn.cursor()
     
@@ -43,17 +50,22 @@ def init_db():
 
     conn.commit()
     conn.close()
-
-# 启动时检查数据库
-try:
-    init_db()
-except Exception as e:
-    print(f"Database initialization failed: {e}")
+    DB_INITIALIZED = True # <--- 成功初始化后设置标记
 
 # --- 路由定义 ---
 @app.route("/", methods=["GET", "POST"])
 def home():
-    # 登录逻辑不变
+    # 修复：在请求时检查和初始化 DB
+    try:
+        init_db()
+    except ValueError as e:
+        # 数据库 URL 未设置，通常是配置问题
+        return f"<h1>配置错误</h1><p>数据库URL未设置: {e}</p>", 500
+    except Exception as e:
+        # 数据库连接失败（例如 PostgreSQL 未启动或密码错误）
+        return f"<h1>数据库连接失败</h1><p>请检查 PostgreSQL 服务状态: {e}</p>", 500
+
+    # 登录逻辑
     if request.method == "POST":
         if request.form.get("id") == str(OWNER_ID):
             session["ok"] = True
@@ -102,6 +114,8 @@ def home():
     </div>
     '''
 
+# --- 后续路由函数（/groups, /admins, /add, /ban, /clear, /logout）保持 PostgreSQL 版本的 SQL 逻辑不变 ---
+
 @app.route("/groups")
 def groups():
     if not session.get("ok"): return redirect("/")
@@ -129,7 +143,6 @@ def add():
     if not g: return "请输入群ID"
     conn = get_db_connection()
     c = conn.cursor()
-    # PostgreSQL 插入/忽略
     try:
         c.execute("INSERT INTO allowed_chats VALUES (%s) ON CONFLICT (chat_id) DO NOTHING", (g,))
         conn.commit()
@@ -145,7 +158,6 @@ def ban():
     if not u: return "请输入用户名"
     conn = get_db_connection()
     c = conn.cursor()
-    # 写入封禁表
     c.execute("INSERT INTO banned_users VALUES (%s) ON CONFLICT (username) DO NOTHING", (u,))
     conn.commit()
     conn.close()
@@ -158,7 +170,6 @@ def clear():
     if not u: return "请输入用户名"
     conn = get_db_connection()
     c = conn.cursor()
-    # 全局清理信誉和投票记录
     c.execute("DELETE FROM ratings WHERE username=%s", (u,))
     c.execute("DELETE FROM votes WHERE username=%s", (u,))
     conn.commit()
