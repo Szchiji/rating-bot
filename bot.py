@@ -8,7 +8,7 @@ from aiogram.types import Message, CallbackQuery, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 TOKEN = os.environ['BOT_TOKEN']
-OWNER_ID = int(os.environ.get('OWNER_ID', '0'))  # 自动读取环境变量
+OWNER_ID = int(os.environ.get('OWNER_ID', '0'))  # 自动读取环境变量，永不改代码！
 
 bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
@@ -17,18 +17,28 @@ dp.include_router(router)
 
 DB = "ratings.db"
 
+# ==================== 初始化数据库（含欢迎词表） ====================
 def init_db():
     conn = sqlite3.connect(DB)
     c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS ratings (chat_id INTEGER, username TEXT, rec INTEGER DEFAULT 0, black INTEGER DEFAULT 0, PRIMARY KEY(chat_id, username))''')
-    c.execute('''CREATE TABLE IF NOT EXISTS votes (chat_id INTEGER, voter INTEGER, username TEXT, type TEXT, time TIMESTAMP, PRIMARY KEY(chat_id,voter,username,type))''')
+    c.execute('''CREATE TABLE IF NOT EXISTS ratings (
+                    chat_id INTEGER, username TEXT,
+                    rec INTEGER DEFAULT 0, black INTEGER DEFAULT 0,
+                    PRIMARY KEY(chat_id, username))''')
+    c.execute('''CREATE TABLE IF NOT EXISTS votes (
+                    chat_id INTEGER, voter INTEGER, username TEXT, type TEXT, time TIMESTAMP,
+                    PRIMARY KEY(chat_id,voter,username,type))''')
     c.execute('''CREATE TABLE IF NOT EXISTS admins (user_id INTEGER PRIMARY KEY)''')
     c.execute('''CREATE TABLE IF NOT EXISTS allowed_chats (chat_id INTEGER PRIMARY KEY)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS bot_settings (key TEXT PRIMARY KEY, value TEXT)''')
+    # 默认欢迎词
+    c.execute("INSERT OR IGNORE INTO bot_settings VALUES ('welcome', '<b>欢迎使用狼猎信誉机器人！</b>\\n\\n• 在群里 @ 用户查看信誉\\n• 发送 /top 查看排行榜\\n• 推荐 +1　拉黑 -1\\n• 刷票者直接封禁')")
     conn.commit()
     conn.close()
 
 init_db()
 
+# ==================== 管理员 & 授权群永久保存 ====================
 def load_admins():
     conn = sqlite3.connect(DB); c = conn.cursor()
     c.execute("SELECT user_id FROM admins")
@@ -56,24 +66,11 @@ if OWNER_ID:
 
 PATTERN = re.compile(r"@?([\w\u4e00-\u9fa5]{2,32})")
 
-# ==================== 完美显示昵称 ====================
-async def get_full_name(username):
-    try:
-        user = await bot.get_chat(username)
-        name = user.full_name
-        if user.username:
-            name += f" (@{user.username})"
-        return name
-    except:
-        return f"@{username}"
-
-# ==================== 超帅信誉卡 ====================
+# ==================== 群内 @ 人 → 显示用户名 + ID ====================
 async def send_card(msg: Message, username: str, r: int, b: int, net: int):
-    display = await get_full_name(username)
-    medal = "Trophy" if net >= 50 else "1st" if net >= 20 else "2nd" if net >= 10 else "3rd" if net >= 5 else ""
-    color = "Green" if net > 5 else "Yellow" if net > 0 else "Red" if net < -5 else "White"
-    status = "神级大佬" if net >= 50 else "信誉极好" if net >= 10 else "危险人物" if net <= -10 else "普通用户"
-    text = f"{medal}<b>{color} {display}</b>{medal}\n\n推荐 {r}　拉黑 {b}\n净值 <b>{net:+d}</b>　{status}"
+    text = f"<b>@{username}</b>　ID: <code>{msg.from_user.id}</code>\n\n"
+    text += f"推荐 {r}　拉黑 {b}\n"
+    text += f"净值 <b>{net:+d}</b>"
     await msg.reply(text, reply_markup=kb(username))
 
 # ==================== 群内功能 ====================
@@ -106,7 +103,7 @@ async def vote(cb: CallbackQuery):
     await send_card(cb.message, u, r, b, net)
     await cb.answer("已推荐" if typ=="rec" else "已拉黑")
 
-# ==================== /top 排行榜 ====================
+# ==================== /top 排行榜（100% 出榜） ====================
 @router.message(Command("top"))
 async def top(msg: Message):
     if msg.chat.id not in ALLOWED_CHAT_IDS: return
@@ -118,66 +115,87 @@ async def top(msg: Message):
     if not rows:
         await msg.reply("本群暂无评价记录")
         return
-    lines = ["<b>   本群信誉排行榜 TOP20   </b>\n"]
+    lines = ["<b>本群信誉排行榜 TOP20</b>\n"]
     for i, (u, r, b, net) in enumerate(rows, 1):
-        medal = "1st" if i==1 else "2nd" if i==2 else "3rd" if i==3 else f"{i}th"
-        name = await get_full_name(u)
-        lines.append(f"{medal} {name}  +{r} -{b} → <b>{net:+d}</b>")
+        lines.append(f"{i:>2}. @{u}  +{r} -{b} → <b>{net:+d}</b>")
     await msg.reply("\n".join(lines))
 
-# ==================== 私聊面板 ====================
+# ==================== 私聊面板（含 /setwelcome） ====================
 @router.message(F.chat.type == "private")
 async def private_handler(msg: Message):
+    # 普通用户显示自定义欢迎词
     if msg.from_user.id not in ADMIN_IDS:
-        await msg.reply("欢迎使用信誉机器人！\n在群里 @ 用户查看信誉\n/top 查看排行榜")
+        conn = sqlite3.connect(DB); c = conn.cursor()
+        c.execute("SELECT value FROM bot_settings WHERE key='welcome'")
+        row = c.fetchone()
+        conn.close()
+        welcome = row[0] if row else "欢迎使用信誉机器人！"
+        await msg.reply(welcome)
         return
 
     text = msg.text.strip()
-    words = text.split(maxsplit=1)
 
-    if len(words) >= 2:
-        cmd, arg = words[0], words[1]
-        if cmd == "/add":
-            try:
-                gid = int(arg)
-                ALLOWED_CHAT_IDS.add(gid)
-                save_group(gid)
-                await msg.reply(f"已永久授权群：{gid}")
-            except: await msg.reply("用法：/add -100xxxxxxxxxx")
-        elif cmd == "/addadmin":
-            try:
-                uid = int(arg)
-                ADMIN_IDS.add(uid)
-                save_admin(uid)
-                await msg.reply(f"已成功添加管理员：{uid}")
-            except: await msg.reply("用法：/addadmin 123456789")
-        elif cmd == "/del":
-            try:
-                gid = int(arg)
-                if gid in ALLOWED_CHAT_IDS:
-                    ALLOWED_CHAT_IDS.remove(gid)
-                    conn = sqlite3.connect(DB); c = conn.cursor()
-                    c.execute("DELETE FROM allowed_chats WHERE chat_id=?", (gid,))
-                    conn.commit(); conn.close()
-                    await msg.reply(f"已永久删除授权群：{gid}")
-            except: await msg.reply("用法：/del -100xxxxxxxxxx")
-        elif cmd == "/deladmin":
-            try:
-                uid = int(arg)
-                if uid in ADMIN_IDS:
-                    ADMIN_IDS.remove(uid)
-                    conn = sqlite3.connect(DB); c = conn.cursor()
-                    c.execute("DELETE FROM admins WHERE user_id=?", (uid,))
-                    conn.commit(); conn.close()
-                    await msg.reply(f"已移除管理员：{uid}")
-            except: await msg.reply("用法：/deladmin 123456789")
+    if text.startswith("/add "):
+        try:
+            gid = int(text.split()[1])
+            ALLOWED_CHAT_IDS.add(gid)
+            save_group(gid)
+            await msg.reply(f"已永久授权群：{gid}")
+        except: await msg.reply("用法：/add -100xxxxxxxxxx")
+
+    elif text.startswith("/addadmin "):
+        try:
+            uid = int(text.split()[1])
+            ADMIN_IDS.add(uid)
+            save_admin(uid)
+            await msg.reply(f"已成功添加管理员：{uid}")
+        except: await msg.reply("用法：/addadmin 123456789")
+
+    elif text.startswith("/del "):
+        try:
+            gid = int(text.split()[1])
+            if gid in ALLOWED_CHAT_IDS:
+                ALLOWED_CHAT_IDS.remove(gid)
+                conn = sqlite3.connect(DB); c = conn.cursor()
+                c.execute("DELETE FROM allowed_chats WHERE chat_id=?", (gid,))
+                conn.commit(); conn.close()
+                await msg.reply(f"已永久删除授权群：{gid}")
+        except: await msg.reply("用法：/del -100xxxxxxxxxx")
+
+    elif text.startswith("/deladmin "):
+        try:
+            uid = int(text.split()[1])
+            if uid in ADMIN_IDS:
+                ADMIN_IDS.remove(uid)
+                conn = sqlite3.connect(DB); c = conn.cursor()
+                c.execute("DELETE FROM admins WHERE user_id=?", (uid,))
+                conn.commit(); conn.close()
+                await msg.reply(f"已移除管理员：{uid}")
+        except: await msg.reply("用法：/deladmin 123456789")
+
+    elif text.startswith("/setwelcome "):
+        new_text = text[11:].strip()
+        if not new_text:
+            await msg.reply("用法：/setwelcome 你要显示的内容")
+            return
+        conn = sqlite3.connect(DB); c = conn.cursor()
+        c.execute("INSERT OR REPLACE INTO bot_settings VALUES ('welcome', ?)", (new_text,))
+        conn.commit(); conn.close()
+        await msg.reply(f"欢迎词已更新！\n\n预览：\n{new_text}")
 
     elif text == "/admins":
         await msg.reply("<b>当前管理员：</b>\n" + "\n".join(str(x) for x in ADMIN_IDS))
     elif text == "/list":
         await msg.reply("<b>已授权群：</b>\n" + "\n".join(str(x) for x in ALLOWED_CHAT_IDS) if ALLOWED_CHAT_IDS else "暂无")
+    elif text in ["/start", "/help"]:
+        await msg.reply(
+            "<b>信誉机器人控制面板</b>\n\n"
+            "群管理：\n/add -100xxx → 添加授权群\n/del -100xxx → 删除授权群\n/list → 查看已授权群\n\n"
+            "管理员管理：\n/addadmin ID → 添加管理员\n/deladmin ID → 删除管理员\n/admins → 查看管理员\n\n"
+            "其他：\n/setwelcome 新内容 → 修改欢迎词"
+        )
 
-# ==================== 数据库函数（已修复 f-string） ====================
+# ==================== 数据库函数 ====================
 def can_vote(chat, voter, user, typ):
     conn = sqlite3.connect(DB)
     c = conn.cursor()
@@ -214,7 +232,7 @@ def kb(user):
     return b.as_markup()
 
 async def main():
-    print("机器人已启动 - 终极完美版")
+    print("机器人已启动 - 终极完美版（带 /setwelcome）")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
