@@ -64,9 +64,9 @@ if OWNER_ID:
 
 PATTERN = re.compile(r"@?([\w\u4e00-\u9fa5]{2,32})")
 
-# ==================== 防刷屏：记录最新消息ID ====================
-LAST_CARD_MSG_ID = {}   # {chat_id: message_id}
-LAST_TOP_MSG_ID = {}    # {chat_id: message_id}
+# ==================== 防刷屏：只保留最新一条 ====================
+LAST_CARD_MSG_ID = {}  # {chat_id: message_id}
+LAST_TOP_MSG_ID = {}   # {chat_id: message_id}
 
 async def delete_old(chat_id, msg_dict):
     if chat_id in msg_dict:
@@ -76,14 +76,13 @@ async def delete_old(chat_id, msg_dict):
             pass
         del msg_dict[chat_id]
 
-# ==================== 信誉卡（显示用户名+ID，自动删旧） ====================
-async def send_card(msg: Message, username: str, r: int, b: int, net: int):
+# ==================== 信誉卡（显示用户名+ID） ====================
+async def send_card(msg: Message, username: str, r: int, b: int, net: int, voter_id=None):
     await delete_old(msg.chat.id, LAST_CARD_MSG_ID)
-    
-    text = f"<b>@{username}</b>  ID: <code>{msg.from_user.id}</code>\n\n"
+    voter_text = f"ID: <code>{voter_id or msg.from_user.id}</code>" if voter_id else ""
+    text = f"<b>@{username}</b>  {voter_text}\n\n"
     text += f"推荐 {r}　拉黑 {b}\n"
     text += f"净值 <b>{net:+d}</b>"
-    
     sent = await msg.reply(text, reply_markup=kb(username))
     LAST_CARD_MSG_ID[msg.chat.id] = sent.message_id
 
@@ -99,7 +98,7 @@ async def group(msg: Message):
         net = r - b
         await send_card(msg, u, r, b, net)
 
-# ==================== 投票（自动更新卡片） ====================
+# ==================== 投票（点击后立即刷新卡片） ====================
 @router.callback_query()
 async def vote(cb: CallbackQuery):
     if cb.message.chat.id not in ALLOWED_CHAT_IDS:
@@ -111,39 +110,46 @@ async def vote(cb: CallbackQuery):
     if not can_vote(cb.message.chat.id, cb.from_user.id, u, typ):
         await cb.answer("24h内只能投一次", show_alert=True)
         return
+    
     add_vote(cb.message.chat.id, cb.from_user.id, u, typ)
     r, b = get_stats(cb.message.chat.id, u)
     net = r - b
+    
     await delete_old(cb.message.chat.id, LAST_CARD_MSG_ID)
-    text = f"<b>@{u}</b>  ID: <code>{cb.from_user.id}</code>\n\n"
-    text += f"推荐 {r}　拉黑 {b}\n"
-    text += f"净值 <b>{net:+d}</b>"
-    await cb.message.edit_text(text, reply_markup=kb(u))
+    await send_card(cb.message, u, r, b, net, cb.from_user.id)
     await cb.answer("已推荐" if typ=="rec" else "已拉黑")
 
-# ==================== /top 排行榜（自动删旧） ====================
+# ==================== /top 排行榜（100% 出榜 + 自动删旧） ====================
 @router.message(Command("top"))
 async def top(msg: Message):
-    if msg.chat.id not in ALLOWED_CHAT_IDS: return
-    await delete_old(msg.chat.id, LAST_TOP_MSG_ID)
-    conn = sqlite3.connect(DB); c = conn.cursor()
-    c.execute("SELECT username, rec, black, (rec-black) as net FROM ratings WHERE chat_id=? ORDER BY net DESC LIMIT 20", (msg.chat.id,))
-    rows = c.fetchall(); conn.close()
+    chat_id = msg.chat.id
+    if chat_id not in ALLOWED_CHAT_IDS: return
+    
+    await delete_old(chat_id, LAST_TOP_MSG_ID)
+    
+    conn = sqlite3.connect(DB)
+    c = conn.cursor()
+    c.execute("SELECT username, rec, black, (rec-black) as net FROM ratings WHERE chat_id=? ORDER BY net DESC, rec DESC LIMIT 20", (chat_id,))
+    rows = c.fetchall()
+    conn.close()
+    
     if not rows:
-        sent = await msg.reply("本群暂无评价记录")
-        LAST_TOP_MSG_ID[msg.chat.id] = sent.message_id
+        sent = await msg.reply("本群暂无评价记录，快去 @ 别人开始吧！")
+        LAST_TOP_MSG_ID[chat_id] = sent.message_id
         return
-    lines = ["<b>   本群信誉排行榜 TOP20   </b>\n"]
+    
+    lines = ["<b>   本群信誉排行榜 TOP20   </b>\n"]
     for i, (u, r, b, net) in enumerate(rows, 1):
-        lines.append(f"{i:>2}. @{u}  +{r} -{b} → <b>{net:+d}</b>")
+        lines.append(f"{i:>2}. @{u}  +{r} -{b} → <b>{net:+d}</b>\n")
+    
     sent = await msg.reply("\n".join(lines))
-    LAST_TOP_MSG_ID[msg.chat.id] = sent.message_id
+    LAST_TOP_MSG_ID[chat_id] = sent.message_id
 
 # ==================== 私聊面板（含封禁+清理） ====================
 @router.message(F.chat.type == "private")
 async def private_handler(msg: Message):
     if msg.from_user.id not in ADMIN_IDS:
-        await msg.reply("欢迎使用信誉机器人！\n在群里 @ 用户查看信誉\n/top 查看排行榜")
+        await msg.reply("欢迎使用狼猎信誉机器人！\n在群里 @ 用户查看信誉\n发送 /top 查看排行榜")
         return
 
     text = msg.text.strip()
@@ -186,7 +192,6 @@ async def private_handler(msg: Message):
                 await msg.reply(f"已移除管理员：{uid}")
         except: await msg.reply("用法：/deladmin 123456789")
 
-    # 一键封禁用户
     elif text.startswith("/banuser "):
         username = text.split(maxsplit=1)[1].lstrip("@")
         try:
@@ -194,9 +199,8 @@ async def private_handler(msg: Message):
             await bot.ban_chat_member(msg.chat.id, user.id)
             await msg.reply(f"已永久封禁 @{username}")
         except:
-            await msg.reply("封禁失败（用户名错误或不在群）")
+            await msg.reply("封禁失败")
 
-    # 一键清理用户记录
     elif text.startswith("/clearuser "):
         username = text.split(maxsplit=1)[1].lstrip("@").lower()
         conn = sqlite3.connect(DB); c = conn.cursor()
@@ -212,7 +216,7 @@ async def private_handler(msg: Message):
         await msg.reply("<b>已授权群：</b>\n" + "\n".join(str(x) for x in ALLOWED_CHAT_IDS) if ALLOWED_CHAT_IDS else "暂无")
     elif text in ["/start", "/help"]:
         await msg.reply(
-            "<b>信誉机器人控制面板</b>\n\n"
+            "<b>狼猎信誉机器人控制面板</b>\n\n"
             "群管理：\n/add /del /list\n"
             "管理员：\n/addadmin /deladmin /admins\n"
             "其他：\n/banuser @xxx → 封禁\n/clearuser @xxx → 清理记录"
