@@ -1,3 +1,4 @@
 flask
 gunicorn
 aiogram
+psycopg2-binary
