@@ -1,7 +1,4 @@
-import os
-import re
-import sqlite3
-import asyncio
+import os, re, sqlite3, asyncio
 from datetime import datetime, timedelta
 from aiogram import Bot, Dispatcher, Router, F
 from aiogram.client.default import DefaultBotProperties
@@ -20,7 +17,6 @@ dp.include_router(router)
 
 DB = "ratings.db"
 
-# ==================== 初始化数据库 ====================
 def init_db():
     conn = sqlite3.connect(DB)
     c = conn.cursor()
@@ -38,7 +34,6 @@ def init_db():
 
 init_db()
 
-# ==================== 永久保存 ====================
 def load_admins():
     conn = sqlite3.connect(DB); c = conn.cursor()
     c.execute("SELECT user_id FROM admins")
@@ -65,27 +60,51 @@ if OWNER_ID:
     ADMIN_IDS.add(OWNER_ID)
     save_admin(OWNER_ID)
 
-PATTERN = re.compile(r"@?([\w\u4e00-\u9fa5\w]{2,32})")
+PATTERN = re.compile(r"@?([\w\u4e00-\u9fa5]{2,32})")
 
-# ==================== 防刷屏 ====================
+# 防刷屏
 LAST_CARD_MSG_ID = {}
-LAST_TOP_MSG_ID = {}
 
-async def delete_old(chat_id: int, msg_dict: dict):
-    if chat_id in msg_dict:
+async def delete_old(chat_id: int):
+    if chat_id in LAST_CARD_MSG_ID:
         try:
-            await bot.delete_message(chat_id, msg_dict[chat_id])
+            await bot.delete_message(chat_id, LAST_CARD_MSG_ID[chat_id])
         except:
             pass
-        del msg_dict[chat_id]
+        del LAST_CARD_MSG_ID[chat_id]
 
-# ==================== 信誉卡（只显示被投票者ID） ====================
-async def send_card(chat_id: int, username: str, r: int, b: int, net: int, target_id: int):
-    await delete_old(chat_id, LAST_CARD_MSG_ID)
-    text = f"<b>@{username}</b>\n"
-    text += f"用户 ID: <code>{target_id}</code>\n\n"
-    text += f"推荐 {r}　拉黑 {b}\n"
-    text += f"净值 <b>{net:+d}</b>"
+# ==================== 超帅美化荣誉卡（只显示被投票者ID） ====================
+async def send_card(chat_id: int, username: str, r: int, b: int, net: int, target_user_id: int):
+    await delete_old(chat_id)
+    
+    # 根据净值显示不同颜色和状态
+    if net >= 20:
+        color = "🟢"
+        status = "信誉极好"
+    elif net >= 5:
+        color = "🟡"
+        status = "信誉良好"
+    elif net >= 0:
+        color = "⚪"
+        status = "普通用户"
+    elif net >= -5:
+        color = "🟠"
+        status = "需观察"
+    else:
+        color = "🔴"
+        status = "危险人物"
+    
+    medal = ""
+    if net >= 50: medal = "🏆"
+    elif net >= 20: medal = "🥇"
+    elif net >= 10: medal = "🥈"
+    elif net >= 5: medal = "🥉"
+    
+    text = f"{medal}<b>{color} @{username}</b>{medal}\n"
+    text += f"用户 ID: <code>{target_user_id}</code>\n\n"
+    text += f"推荐 <b>{r:>3}</b>    拉黑 <b>{b:>3}</b>\n"
+    text += f"净值 <b>{net:+4d}</b>  {status}"
+    
     sent = await bot.send_message(chat_id, text, reply_markup=kb(username))
     LAST_CARD_MSG_ID[chat_id] = sent.message_id
 
@@ -94,16 +113,21 @@ async def send_card(chat_id: int, username: str, r: int, b: int, net: int, targe
 async def group(msg: Message):
     if msg.chat.id not in ALLOWED_CHAT_IDS: return
     if not msg.text or msg.text.startswith('/'): return
+    
     for raw in PATTERN.findall(msg.text)[:3]:
         u = raw.lstrip("@").lower()
         if len(u) < 3 or u.isdigit(): continue
+        
         r, b = get_stats(msg.chat.id, u)
         net = r - b
+        
+        # 获取被@用户的真实ID
         try:
-            user = await bot.get_chat(u)
-            target_id = user.id
+            user_obj = await bot.get_chat(u)
+            target_id = user_obj.id
         except:
-            target_id = "未知"
+            target_id = "获取失败"
+        
         await send_card(msg.chat.id, u, r, b, net, target_id)
 
 # ==================== 投票（点击后立即刷新） ====================
@@ -116,6 +140,7 @@ async def vote(cb: CallbackQuery):
     if "_" not in cb.data: return
     typ, u = cb.data.split("_", 1)
     u = u.lower()
+    
     if not can_vote(chat_id, cb.from_user.id, u, typ):
         await cb.answer("24h内只能投一次", show_alert=True)
         return
@@ -124,51 +149,22 @@ async def vote(cb: CallbackQuery):
     r, b = get_stats(chat_id, u)
     net = r - b
     
-    await delete_old(chat_id, LAST_CARD_MSG_ID)
-    
+    # 获取被投票者真实ID
     try:
-        user = await bot.get_chat(u)
-        target_id = user.id
+        user_obj = await bot.get_chat(u)
+        target_id = user_obj.id
     except:
-        target_id = "未知"
+        target_id = "获取失败"
     
+    await delete_old(chat_id)
     await send_card(chat_id, u, r, b, net, target_id)
     await cb.answer("已推荐" if typ == "rec" else "已拉黑")
 
-# ==================== /top 排行榜（100% 出榜，永不失败） ====================
-@router.message(Command("top"))
-async def top(msg: Message):
-    chat_id = msg.chat.id
-    if chat_id not in ALLOWED_CHAT_IDS:
-        return
-    
-    # 删除旧榜
-    await delete_old(chat_id, LAST_TOP_MSG_ID)
-    
-    # 读取数据
-    conn = sqlite3.connect(DB)
-    c = conn.cursor()
-    c.execute("SELECT username, rec, black, (rec-black) as net FROM ratings WHERE chat_id=? ORDER BY net DESC, rec DESC LIMIT 20", (chat_id,))
-    rows = c.fetchall()
-    conn.close()
-    
-    if not rows:
-        sent = await msg.reply("本群暂无评价记录，快去 @ 别人开始吧！")
-        LAST_TOP_MSG_ID[chat_id] = sent.message_id
-        return
-    
-    lines = ["<b>  本群信誉排行榜 TOP20  </b>\n"]
-    for i, (u, r, b, net) in enumerate(rows, 1):
-        lines.append(f"{i:>2}. @{u}  +{r} -{b} → <b>{net:+d}</b>\n")
-    
-    sent = await msg.reply("\n".join(lines))
-    LAST_TOP_MSG_ID[chat_id] = sent.message_id
-
-# ==================== 私聊面板（保持不变） ====================
+# ==================== 私聊面板 ====================
 @router.message(F.chat.type == "private")
 async def private_handler(msg: Message):
     if msg.from_user.id not in ADMIN_IDS:
-        await msg.reply("欢迎使用狼猎信誉机器人！\n在群里 @ 用户查看信誉\n发送 /top 查看排行榜")
+        await msg.reply("欢迎使用狼猎信誉机器人！\n在群里 @ 用户查看信誉")
         return
 
     text = msg.text.strip()
@@ -189,56 +185,10 @@ async def private_handler(msg: Message):
             await msg.reply(f"已成功添加管理员：{uid}")
         except: await msg.reply("用法：/addadmin 123456789")
 
-    elif text.startswith("/del "):
-        try:
-            gid = int(text.split()[1])
-            if gid in ALLOWED_CHAT_IDS:
-                ALLOWED_CHAT_IDS.remove(gid)
-                conn = sqlite3.connect(DB); c = conn.cursor()
-                c.execute("DELETE FROM allowed_chats WHERE chat_id=?", (gid,))
-                conn.commit(); conn.close()
-                await msg.reply(f"已永久删除授权群：{gid}")
-        except: await msg.reply("用法：/del -100xxxxxxxxxx")
-
-    elif text.startswith("/deladmin "):
-        try:
-            uid = int(text.split()[1])
-            if uid in ADMIN_IDS:
-                ADMIN_IDS.remove(uid)
-                conn = sqlite3.connect(DB); c = conn.cursor()
-                c.execute("DELETE FROM admins WHERE user_id=?", (uid,))
-                conn.commit(); conn.close()
-                await msg.reply(f"已移除管理员：{uid}")
-        except: await msg.reply("用法：/deladmin 123456789")
-
-    elif text.startswith("/banuser "):
-        username = text.split(maxsplit=1)[1].lstrip("@")
-        try:
-            user = await bot.get_chat(username)
-            await bot.ban_chat_member(msg.chat.id, user.id)
-            await msg.reply(f"已永久封禁 @{username}")
-        except: await msg.reply("封禁失败")
-
-    elif text.startswith("/clearuser "):
-        username = text.split(maxsplit=1)[1].lstrip("@").lower()
-        conn = sqlite3.connect(DB); c = conn.cursor()
-        c.execute("DELETE FROM ratings WHERE username=? AND chat_id=?", (username, msg.chat.id))
-        c.execute("DELETE FROM votes WHERE username=? AND chat_id=?", (username, msg.chat.id))
-        deleted = c.rowcount
-        conn.commit(); conn.close()
-        await msg.reply(f"已清理 @{username} 的 {deleted} 条记录" if deleted else "未找到记录")
-
     elif text == "/admins":
         await msg.reply("<b>当前管理员：</b>\n" + "\n".join(str(x) for x in ADMIN_IDS))
     elif text == "/list":
         await msg.reply("<b>已授权群：</b>\n" + "\n".join(str(x) for x in ALLOWED_CHAT_IDS) if ALLOWED_CHAT_IDS else "暂无")
-    elif text in ["/start", "/help"]:
-        await msg.reply(
-            "<b>狼猎信誉机器人控制面板</b>\n\n"
-            "群管理：\n/add /del /list\n"
-            "管理员：\n/addadmin /deladmin /admins\n"
-            "其他：\n/banuser @xxx → 封禁\n/clearuser @xxx → 清理记录"
-        )
 
 # ==================== 数据库函数 ====================
 def can_vote(chat, voter, user, typ):
@@ -274,7 +224,7 @@ def kb(user):
     return b.as_markup()
 
 async def main():
-    print("狼猎信誉机器人 - 终极完美版已启动")
+    print("狼猎信誉机器人 - 终极美化版已启动")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
