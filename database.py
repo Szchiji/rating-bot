@@ -16,14 +16,16 @@ async def init_db_pool():
         raise ValueError("DATABASE_URL environment variable is not set!")
     
     try:
-        db_pool = await asyncpg.create_pool(DATABASE_URL)
+        # **重要修复点：添加 ssl='disable' 尝试解决云数据库的 SSL/TLS 连接问题**
+        db_pool = await asyncpg.create_pool(DATABASE_URL, ssl='disable')
         print("Database connection pool successfully initialized.")
     except Exception as e:
         print(f"FATAL ERROR: Could not connect to database: {e}")
+        # 抛出异常，让 Bot 进程中止，以便在 bot.log 中捕获到错误
         raise
 
 async def init_schema():
-    """初始化数据库表结构 (已包含 banned_users 的 time 字段)"""
+    """初始化数据库表结构"""
     await init_db_pool()
 
     async with db_pool.acquire() as conn:
@@ -69,7 +71,7 @@ async def init_schema():
             ON CONFLICT (key) DO NOTHING
         """, 'welcome', '<b>狼猎信誉系统</b>\n\n@用户查看信誉\n推荐+1 拉黑-1\n24h内同人只能投一次')
 
-# --- 核心操作函数 ---
+# --- 核心操作函数 (保持不变) ---
 
 async def get_stats(user_id: int):
     """通过 user_id 获取信誉统计"""
@@ -189,12 +191,11 @@ async def set_welcome_message(text: str):
         await conn.execute("INSERT INTO bot_settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value", 
                            'welcome', text)
 
-# --- NEW: Dashboard 统计函数 ---
+# --- Dashboard 统计函数 (保持不变) ---
 async def get_total_users():
     """获取信誉系统中总用户数"""
     try:
         async with db_pool.acquire() as conn:
-            # 统计 ratings 表中的行数
             return await conn.fetchval("SELECT COUNT(*) FROM ratings") or 0
     except Exception as e:
         print(f"Database Error in get_total_users: {e}")
@@ -204,7 +205,6 @@ async def get_total_votes():
     """获取总投票记录数"""
     try:
         async with db_pool.acquire() as conn:
-            # 统计 votes 表中的行数
             return await conn.fetchval("SELECT COUNT(*) FROM votes") or 0
     except Exception as e:
         print(f"Database Error in get_total_votes: {e}")
