@@ -16,12 +16,12 @@ async def init_db_pool():
         raise ValueError("DATABASE_URL environment variable is not set!")
     
     try:
-        # **保留 ssl='disable' 尝试解决云数据库的 SSL/TLS 连接问题**
+        # 保留 ssl='disable' 尝试解决云数据库的 SSL/TLS 连接问题
         db_pool = await asyncpg.create_pool(DATABASE_URL, ssl='disable')
         print("Database connection pool successfully initialized.")
     except Exception as e:
         print(f"FATAL ERROR: Could not connect to database: {e}")
-        # 抛出异常，让 Bot 进程中止，以便在 bot.log 中捕获到错误
+        # 抛出异常，让进程中止
         raise
 
 async def init_schema():
@@ -71,24 +71,20 @@ async def init_schema():
             ON CONFLICT (key) DO NOTHING
         """, 'welcome', '<b>狼猎信誉系统</b>\n\n@用户查看信誉\n推荐+1 拉黑-1\n24h内同人只能投一次')
 
-# --- 核心操作函数 (保持不变) ---
+# --- 核心操作函数 (省略，与之前一致) ---
 
 async def get_stats(user_id: int):
-    """通过 user_id 获取信誉统计"""
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow("SELECT rec, black, username FROM ratings WHERE user_id = $1", user_id)
         return (row['rec'], row['black'], row['username']) if row else (0, 0, None)
 
 async def add_vote(chat_id: int, voter_id: int, target_id: int, typ: str, username: str, evidence_msg_id: int = None):
-    """添加投票记录和更新信誉，支持记录 evidence_msg_id"""
     async with db_pool.acquire() as conn:
         col = "rec" if typ == "rec" else "black"
-        
         await conn.execute(f"""
             INSERT INTO ratings (user_id, username, {col}) VALUES ($1, $2, 1) 
             ON CONFLICT (user_id) DO UPDATE SET {col}=ratings.{col}+1, username=EXCLUDED.username
         """, target_id, username)
-        
         await conn.execute(f"""
             INSERT INTO votes (chat_id, voter_id, target_id, type, time, evidence_msg_id) 
             VALUES ($1, $2, $3, $4, NOW(), $5) 
@@ -96,7 +92,6 @@ async def add_vote(chat_id: int, voter_id: int, target_id: int, typ: str, userna
         """, chat_id, voter_id, target_id, typ, evidence_msg_id)
 
 async def can_vote(chat_id: int, voter_id: int, target_id: int, typ: str):
-    """检查 24 小时投票限制"""
     async with db_pool.acquire() as conn:
         cutoff = datetime.now() - timedelta(hours=24)
         row = await conn.fetchrow(
@@ -106,46 +101,37 @@ async def can_vote(chat_id: int, voter_id: int, target_id: int, typ: str):
         return row is None
 
 async def is_banned(user_id: int):
-    """检查用户是否被封禁"""
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow("SELECT 1 FROM banned_users WHERE user_id = $1", user_id)
         return row is not None
 
 async def get_banned_list():
-    """获取所有被封禁的用户列表 (包含 time 字段，用于 Web UI)"""
     try:
         async with db_pool.acquire() as conn:
-            # 确保查询包含 time 字段
             return await conn.fetch("SELECT user_id, username, time FROM banned_users")
     except Exception as e:
         print(f"Database Error in get_banned_list: {e}")
         return []
 
 async def unban_user(user_id: int):
-    """解禁用户"""
     async with db_pool.acquire() as conn:
         await conn.execute("DELETE FROM banned_users WHERE user_id = $1", user_id)
 
 async def ban_user(user_id: int, username: str):
-    """封禁用户"""
     async with db_pool.acquire() as conn:
-        # 确保插入时设置了 time=NOW()
         await conn.execute("INSERT INTO banned_users (user_id, username, time) VALUES ($1, $2, NOW()) ON CONFLICT (user_id) DO UPDATE SET username=EXCLUDED.username, time=NOW()", user_id, username)
 
 async def clear_user_data(user_id: int):
-    """清除用户所有记录"""
     async with db_pool.acquire() as conn:
         await conn.execute("DELETE FROM ratings WHERE user_id = $1", user_id)
         await conn.execute("DELETE FROM votes WHERE target_id = $1 OR voter_id = $1", user_id)
 
 async def get_chat_settings(chat_id: int):
-    """获取群组设置，用于投票门槛和强制关注 (Bot 使用)"""
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow("SELECT min_join_days, force_channel_id FROM chat_settings WHERE chat_id = $1", chat_id)
         return row if row else {'min_join_days': 0, 'force_channel_id': 0}
 
 async def get_chat_settings_list():
-    """获取所有群组设置列表 (用于 Web UI)"""
     try:
         async with db_pool.acquire() as conn:
             return await conn.fetch("SELECT chat_id, min_join_days, force_channel_id FROM chat_settings")
@@ -154,46 +140,37 @@ async def get_chat_settings_list():
         return []
 
 async def get_allowed_chats():
-    """获取所有已授权的群组 ID"""
     async with db_pool.acquire() as conn:
         return await conn.fetch("SELECT chat_id FROM allowed_chats")
 
 async def save_admin(uid: int):
-    """保存管理员 ID"""
     async with db_pool.acquire() as conn:
         await conn.execute("INSERT INTO admins VALUES ($1) ON CONFLICT (user_id) DO NOTHING", uid)
 
 async def load_admins():
-    """加载管理员 ID"""
     async with db_pool.acquire() as conn:
         rows = await conn.fetch("SELECT user_id FROM admins")
         return {row['user_id'] for row in rows}
 
 async def save_group(gid: int):
-    """保存授权群 ID"""
     async with db_pool.acquire() as conn:
         await conn.execute("INSERT INTO allowed_chats VALUES ($1) ON CONFLICT (chat_id) DO NOTHING", gid)
 
 async def del_group(gid: int):
-    """删除授权群 ID"""
     async with db_pool.acquire() as conn:
         await conn.execute("DELETE FROM allowed_chats WHERE chat_id = $1", gid)
 
 async def get_welcome_message():
-    """获取欢迎消息"""
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow("SELECT value FROM bot_settings WHERE key='welcome'")
         return row['value'] if row else "欢迎使用"
 
 async def set_welcome_message(text: str):
-    """设置欢迎消息"""
     async with db_pool.acquire() as conn:
         await conn.execute("INSERT INTO bot_settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value", 
                            'welcome', text)
 
-# --- Dashboard 统计函数 (保持不变) ---
 async def get_total_users():
-    """获取信誉系统中总用户数"""
     try:
         async with db_pool.acquire() as conn:
             return await conn.fetchval("SELECT COUNT(*) FROM ratings") or 0
@@ -202,7 +179,6 @@ async def get_total_users():
         return 0
 
 async def get_total_votes():
-    """获取总投票记录数"""
     try:
         async with db_pool.acquire() as conn:
             return await conn.fetchval("SELECT COUNT(*) FROM votes") or 0
