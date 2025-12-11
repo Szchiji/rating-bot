@@ -4,8 +4,7 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.types import Message, CallbackQuery, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-from database import * # <--- 引入所有异步数据库函数
-from datetime import datetime, timedelta
+from database import * from datetime import datetime, timedelta
 
 TOKEN = os.environ.get('BOT_TOKEN')
 OWNER_ID = int(os.environ.get('OWNER_ID', '0'))
