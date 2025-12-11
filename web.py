@@ -5,6 +5,19 @@ from asgiref.wsgi import WsgiToAsgi
 from database import get_banned_list, unban_user, get_total_users, get_total_votes, get_chat_settings_list, db_pool, init_db_pool
 
 # --- 配置 ---
+
+# --- DEBUG: 临时调试代码 ---
+print("-" * 50)
+print(f"WEB DEBUG: Checking DATABASE_URL status.")
+# 仅打印是否存在，不打印值
+if os.environ.get('DATABASE_URL'):
+    print("WEB DEBUG: DATABASE_URL IS SET.")
+else:
+    print("WEB DEBUG: DATABASE_URL IS MISSING! THIS IS THE PROBLEM.")
+print("-" * 50)
+# --- DEBUG 结束 ---
+
+
 app = Flask(__name__)
 
 # 用于 Web 页面身份验证 (非常简陋，生产环境应使用更安全的机制)
@@ -28,22 +41,26 @@ def is_authorized(auth_header):
     return False
 
 # Flask 视图需要同步函数。
-# 由于 database.py 中的函数是异步的，我们使用 asyncio.run 来同步调用它们。
 def sync_call(coro):
-    """同步地运行异步协程"""
-    # 确保只在 Web Worker 中初始化一次数据库连接池
+    """同步地运行异步协程，并确保数据库连接池已初始化"""
+    global db_pool
+    # 确保 Web Worker 中的数据库连接池被初始化
     if not db_pool:
-        asyncio.run(init_db_pool())
+        try:
+            asyncio.run(init_db_pool())
+        except Exception as e:
+            # 如果 Web Worker 连接失败，打印错误并重新抛出，以便 Web Logs 捕获
+            print(f"WEB FATAL ERROR: Database connection failed during sync_call: {e}")
+            raise RuntimeError("Database connection failed for Web Worker.") from e
+            
     return asyncio.run(coro)
 
-# --- Web 路由：API ---
+# --- Web 路由 (省略，与之前一致) ---
 
 @app.route('/api/stats', methods=['GET'])
 def stats_api():
-    """获取统计信息 API"""
     if not is_authorized(request.headers.get('Authorization')):
         return jsonify({"error": "Unauthorized"}), 401
-    
     try:
         total_users = sync_call(get_total_users())
         total_votes = sync_call(get_total_votes())
@@ -56,13 +73,10 @@ def stats_api():
 
 @app.route('/api/banned', methods=['GET'])
 def banned_api():
-    """获取被封禁用户列表 API"""
     if not is_authorized(request.headers.get('Authorization')):
         return jsonify({"error": "Unauthorized"}), 401
-    
     try:
         banned_users = sync_call(get_banned_list())
-        # 格式化时间对象为字符串以便 JSON 序列化
         data = [
             {
                 "user_id": user['user_id'], 
@@ -77,10 +91,8 @@ def banned_api():
 
 @app.route('/api/unban/<int:user_id>', methods=['POST'])
 def unban_api(user_id):
-    """解除封禁 API"""
     if not is_authorized(request.headers.get('Authorization')):
         return jsonify({"error": "Unauthorized"}), 401
-    
     try:
         sync_call(unban_user(user_id))
         return jsonify({"status": "success", "user_id": user_id})
@@ -89,20 +101,14 @@ def unban_api(user_id):
 
 @app.route('/api/chat_settings', methods=['GET'])
 def chat_settings_api():
-    """获取群组设置列表 API"""
     if not is_authorized(request.headers.get('Authorization')):
         return jsonify({"error": "Unauthorized"}), 401
-    
     try:
         settings_list = sync_call(get_chat_settings_list())
-        # 直接返回列表，因为 chat_id, min_join_days, force_channel_id 都是基本类型
         return jsonify(list(settings_list))
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# --- Web 路由：Dashboard (HTML/JS) ---
-
-# 简单的 HTML 模板，包含 JS 用于调用 API
 DASHBOARD_HTML = """
 <!DOCTYPE html>
 <html lang="zh-CN">
@@ -137,7 +143,7 @@ DASHBOARD_HTML = """
         </div>
 
         <div class="stats" id="stats-section">
-            </div>
+        </div>
 
         <h2>⛔ 封禁用户列表</h2>
         <table id="banned-table">
@@ -150,7 +156,7 @@ DASHBOARD_HTML = """
                 </tr>
             </thead>
             <tbody>
-                </tbody>
+            </tbody>
         </table>
 
         <h2>⚙️ 群组设置列表</h2>
@@ -163,17 +169,16 @@ DASHBOARD_HTML = """
                 </tr>
             </thead>
             <tbody>
-                </tbody>
+            </tbody>
         </table>
 
     </div>
 
     <script>
         const API_URL = window.location.origin + '/api';
-        const AUTH_HEADER = '{{ WEB_SECRET_KEY }}'; // 从 Flask 模板注入密钥
+        const AUTH_HEADER = '{{ WEB_SECRET_KEY }}';
 
         function getAuthHeaders() {
-            // 默认从 URL 注入的密钥生成 Bearer 头
             return {
                 'Authorization': 'Bearer ' + AUTH_HEADER,
                 'Content-Type': 'application/json'
@@ -185,7 +190,6 @@ DASHBOARD_HTML = """
             document.getElementById('auth-error').style.display = 'block';
         }
 
-        // --- 1. 加载统计数据 ---
         async function loadStats() {
             try {
                 const response = await fetch(API_URL + '/stats', { headers: getAuthHeaders() });
@@ -202,7 +206,6 @@ DASHBOARD_HTML = """
             }
         }
 
-        // --- 2. 加载封禁用户列表 ---
         async function loadBannedUsers() {
             const tableBody = document.getElementById('banned-table').getElementsByTagName('tbody')[0];
             tableBody.innerHTML = '<tr><td colspan="4">加载中...</td></tr>';
@@ -212,7 +215,7 @@ DASHBOARD_HTML = """
                 if (response.status === 401) throw new Error("Unauthorized");
                 const users = await response.json();
 
-                tableBody.innerHTML = ''; // 清空加载提示
+                tableBody.innerHTML = '';
                 if (users.length === 0) {
                     tableBody.innerHTML = '<tr><td colspan="4">当前没有被封禁的用户。</td></tr>';
                     return;
@@ -237,7 +240,6 @@ DASHBOARD_HTML = """
             }
         }
 
-        // --- 3. 解禁用户操作 ---
         async function unbanUser(userId, button) {
             if (!confirm(`确定要解除对用户 ID: ${userId} 的封禁吗？`)) return;
 
@@ -254,7 +256,7 @@ DASHBOARD_HTML = """
                 const result = await response.json();
                 if (result.status === 'success') {
                     alert(`用户 ${userId} 已被解除封禁。`);
-                    loadBannedUsers(); // 重新加载列表
+                    loadBannedUsers();
                 } else {
                     alert('解禁失败: ' + result.error);
                 }
@@ -267,7 +269,6 @@ DASHBOARD_HTML = """
             }
         }
 
-        // --- 4. 加载群组设置列表 ---
         async function loadChatSettings() {
             const tableBody = document.getElementById('chat-settings-table').getElementsByTagName('tbody')[0];
             tableBody.innerHTML = '<tr><td colspan="3">加载中...</td></tr>';
@@ -277,7 +278,7 @@ DASHBOARD_HTML = """
                 if (response.status === 401) throw new Error("Unauthorized");
                 const settings = await response.json();
 
-                tableBody.innerHTML = ''; // 清空加载提示
+                tableBody.innerHTML = '';
                 if (settings.length === 0) {
                     tableBody.innerHTML = '<tr><td colspan="3">当前没有群组设置记录。</td></tr>';
                     return;
@@ -295,7 +296,6 @@ DASHBOARD_HTML = """
             }
         }
 
-        // 页面初始化
         document.addEventListener('DOMContentLoaded', () => {
             loadStats();
             loadBannedUsers();
@@ -309,29 +309,23 @@ DASHBOARD_HTML = """
 @app.route('/', methods=['GET'])
 def dashboard():
     """管理面板主页"""
-    # 在生产环境中，应该在这里进行更严格的会话/令牌验证
-    # 这里我们依赖 GET 参数或 Bearer Header
     auth_header = request.headers.get('Authorization')
-    
-    # 如果 Web Worker 启动时数据库连接失败，Dashboard 可能会崩溃，这里先做最基本的检查
-    if not db_pool:
-        try:
-            sync_call(init_db_pool())
-        except Exception as e:
-            return f"<h1>Web Worker 数据库初始化失败</h1><p>Bot 可能仍在尝试连接或配置错误：{e}</p>", 503
-
-    # 允许通过 URL 参数传递密钥 (简单方便，但安全性低)
     url_key = request.args.get('key')
     
-    # 优先检查 Bearer Header
-    if is_authorized(auth_header):
-        return render_template_string(DASHBOARD_HTML, WEB_SECRET_KEY=WEB_SECRET_KEY)
-    
-    # 其次检查 URL 密钥
-    if url_key and url_key == WEB_SECRET_KEY:
+    # 在处理请求时检查数据库连接状态
+    if not db_pool:
+        try:
+            # 尝试初始化数据库连接池，如果失败，会抛出异常
+            sync_call(asyncio.sleep(0.01)) # 强制调用 sync_call 来触发初始化
+        except Exception as e:
+            # 如果 Web Worker 连接失败，显示 503 错误
+            return f"<h1>Web Worker 数据库初始化失败 (503)</h1><p>Bot 可能仍在尝试连接或配置错误，请检查日志。</p><p>详细错误：{e}</p>", 503
+
+    # 认证检查
+    if is_authorized(auth_header) or (url_key and url_key == WEB_SECRET_KEY):
         return render_template_string(DASHBOARD_HTML, WEB_SECRET_KEY=WEB_SECRET_KEY)
         
-    # 如果认证失败，只显示认证错误信息
+    # 如果认证失败
     return """
     <h1>信誉系统管理面板</h1>
     <p>访问被拒绝。请使用正确的密钥（通过 URL 参数 <code>?key=YOUR_KEY</code> 或 Bearer 认证 Header）访问。</p>
@@ -340,7 +334,4 @@ def dashboard():
 
 
 # --- ASGI 兼容性包装 ---
-# 确保 Gunicorn 可以使用 uvicorn worker 来运行 Flask
 app = WsgiToAsgi(app)
-
-# Note: Gunicorn/Uvicorn 会通过 exec gunicorn... web:app 调用此处的 app
