@@ -5,6 +5,7 @@ import database
 from functools import wraps
 from asgiref.wsgi import WsgiToAsgi
 
+# --- 初始化 Flask App ---
 app = Flask(__name__)
 # 确保 SECRET_KEY 是随机的
 app.secret_key = os.environ.get("SECRET_KEY", "WOLF_HUNTER_SECURE_KEY_RANDOM")
@@ -12,7 +13,7 @@ app.secret_key = os.environ.get("SECRET_KEY", "WOLF_HUNTER_SECURE_KEY_RANDOM")
 OWNER_ID = os.environ.get("OWNER_ID")
 OWNER_PASSWORD = os.environ.get("OWNER_PASSWORD")
 
-# --- 基础 CSS 样式 ---
+# --- 基础 CSS 样式 (保持不变) ---
 BASE_CSS = """
 <style>
     body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f4f7f6; color: #333; margin: 0; padding: 20px; }
@@ -36,27 +37,28 @@ BASE_CSS = """
 </style>
 """
 
-# --- 辅助函数：强制运行异步代码 (解决 'coroutine' 错误) ---
+# --- 辅助函数：强制运行异步代码 (关键函数) ---
 def run_async(coro):
     """在一个同步线程中运行异步代码并返回结果"""
     try:
         loop = asyncio.get_event_loop()
     except RuntimeError:
+        # 如果当前线程没有事件循环，创建一个新的
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         
     if loop.is_running():
-        # 如果事件循环已经在运行，使用 run_coroutine_threadsafe
+        # 如果事件循环已经在运行（例如在 Uvicorn Worker 线程池中），使用 run_coroutine_threadsafe
         future = asyncio.run_coroutine_threadsafe(coro, loop)
         return future.result()
     else:
-        # 否则，运行新的事件循环
+        # 否则，运行新的事件循环直到协程完成
         return loop.run_until_complete(coro)
 # --- 辅助函数结束 ---
 
 def flash(message, category):
     """自定义 flash 函数，使用 session 存储消息"""
-    session.setdefault('_flashes', []).append((message, category))
+    session.setdefault('_flashes', []).append((category, message)) # 修正参数顺序
 
 # --- 装饰器：管理员权限检查 ---
 def login_required(f):
@@ -83,6 +85,7 @@ def home():
 
     # 获取并显示操作反馈信息
     messages = session.pop('_flashes', [])
+    # 注意：这里需要确保 flash 存储的格式与取出时的格式匹配 (category, message)
     flash_html = "".join([f'<div class="alert-{category}">{message}</div>' for category, message in messages])
     
     if session.get("ok"):
@@ -115,6 +118,7 @@ def home():
         </div>
         '''
     
+    # 登录页面的 HTML
     return f'''
     <meta name="viewport" content="width=device-width, initial-scale=1">
     {BASE_CSS}
@@ -135,13 +139,17 @@ def home():
 @login_required
 def group_settings():
     async def inner_logic():
+        # 强制检查连接池，如果 Web Worker 启动时 Bot 失败了，这里会抛出异常
+        if database.db_pool is None:
+             await database.init_db_pool()
+             
         if request.method == "POST":
             group_id = request.form.get("gid")
             join_days = request.form.get("days", 0)
             channel_id = request.form.get("cid", 0)
             
             try:
-                # 检查强制关注ID是否是数字（Bot中会再次检查是否有效）
+                # 检查强制关注ID是否是数字
                 if str(channel_id).strip() and not str(channel_id).strip().startswith(('-', '1', '2', '3', '4', '5', '6', '7', '8', '9')):
                     flash("⚠️ 强制关注ID必须是数字 ID！", "error")
                     return redirect(url_for('group_settings'))
@@ -185,6 +193,7 @@ def group_settings():
             gid = group['chat_id']
             s = settings_map.get(gid, {'min_join_days': 0, 'force_channel_id': 0})
             
+            # 使用 GET 方法获取，避免在表格中嵌套 POST 表单的复杂性
             html += f"<form method='post'><tr>"
             html += f"<td><code>{gid}</code><input type='hidden' name='gid' value='{gid}'></td>"
             
@@ -204,6 +213,8 @@ def group_settings():
 @login_required
 def groups_list():
     async def inner_logic():
+        if database.db_pool is None: await database.init_db_pool()
+
         async with database.db_pool.acquire() as conn:
             groups = await conn.fetch("SELECT chat_id FROM allowed_chats")
             g = [r['chat_id'] for r in groups]
@@ -229,6 +240,8 @@ def groups_list():
 @login_required
 def banned_list():
     async def inner_logic():
+        if database.db_pool is None: await database.init_db_pool()
+
         banned = await database.get_banned_list()
         
         flash_html = "".join([f'<div class="alert-{category}">{message}</div>' for category, message in session.pop('_flashes', [])])
@@ -273,6 +286,8 @@ def banned_list():
 @login_required
 def unban_user_route():
     async def inner_logic():
+        if database.db_pool is None: await database.init_db_pool()
+
         uid = request.form["uid"]
         if not uid: 
             flash("⚠️ 请提供用户ID。", "error")
@@ -293,6 +308,8 @@ def unban_user_route():
 @login_required
 def ban_user_route():
     async def inner_logic():
+        if database.db_pool is None: await database.init_db_pool()
+
         uid = request.form["uid"]
         uname = request.form.get("uname", None)
         if not uid: 
@@ -313,6 +330,8 @@ def ban_user_route():
 @login_required
 def clear_data_route():
     async def inner_logic():
+        if database.db_pool is None: await database.init_db_pool()
+
         uid = request.form["uid"]
         if not uid: 
             flash("⚠️ 请输入用户ID。", "error")
@@ -335,7 +354,3 @@ def logout():
 
 # 包装 Flask 应用为 ASGI 应用
 app = WsgiToAsgi(app)
-
-# 仅供本地测试，部署时由 gunicorn 负责
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
