@@ -5,7 +5,7 @@ from aiogram.enums import ParseMode
 from aiogram.types import Message, CallbackQuery, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-# **语法错误已修复，导入语句现在是正确的两行**
+# **关键修复：将错误的单行导入拆分成两行**
 from database import * from datetime import datetime, timedelta
 
 TOKEN = os.environ.get('BOT_TOKEN')
