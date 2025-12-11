@@ -288,10 +288,12 @@ async def main():
     try:
         await init_schema()
         await load_configs() 
-        print("狼猎信誉机器人 - 异步 PostgreSQL 高级功能版本已启动") 
+        print("狼猎信誉机器人 - 异步 PostgreSQL 高级功能版本已启动") # READY_FLAG
         await dp.start_polling(bot)
     except Exception as e:
-        print(f"BOT FAILED TO START due to database or config error: {e}")
+        # **重要修改：打印具体错误信息，以便在 start.sh 超时时捕获**
+        print(f"BOT FAILED TO START due to database or config error: {e}") 
+        # 确保 Bot 进程在失败时退出，避免无限重试
         exit(1)
 
 if __name__ == "__main__":
