@@ -10,7 +10,7 @@ async def init_db_pool():
     """初始化数据库连接池"""
     global db_pool
     if db_pool:
-        return # 如果已初始化，则跳过
+        return
         
     if not DATABASE_URL:
         raise ValueError("DATABASE_URL environment variable is not set!")
@@ -135,3 +135,36 @@ async def get_allowed_chats():
     """获取所有已授权的群组 ID"""
     async with db_pool.acquire() as conn:
         return await conn.fetch("SELECT chat_id FROM allowed_chats")
+
+async def save_admin(uid: int):
+    """保存管理员 ID"""
+    async with db_pool.acquire() as conn:
+        await conn.execute("INSERT INTO admins VALUES ($1) ON CONFLICT (user_id) DO NOTHING", uid)
+
+async def load_admins():
+    """加载管理员 ID"""
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch("SELECT user_id FROM admins")
+        return {row['user_id'] for row in rows}
+
+async def save_group(gid: int):
+    """保存授权群 ID"""
+    async with db_pool.acquire() as conn:
+        await conn.execute("INSERT INTO allowed_chats VALUES ($1) ON CONFLICT (chat_id) DO NOTHING", gid)
+
+async def del_group(gid: int):
+    """删除授权群 ID"""
+    async with db_pool.acquire() as conn:
+        await conn.execute("DELETE FROM allowed_chats WHERE chat_id = $1", gid)
+
+async def get_welcome_message():
+    """获取欢迎消息"""
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT value FROM bot_settings WHERE key='welcome'")
+        return row['value'] if row else "欢迎使用"
+
+async def set_welcome_message(text: str):
+    """设置欢迎消息"""
+    async with db_pool.acquire() as conn:
+        await conn.execute("INSERT INTO bot_settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value", 
+                           'welcome', text)
