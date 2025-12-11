@@ -188,3 +188,24 @@ async def set_welcome_message(text: str):
     async with db_pool.acquire() as conn:
         await conn.execute("INSERT INTO bot_settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value", 
                            'welcome', text)
+
+# --- NEW: Dashboard 统计函数 ---
+async def get_total_users():
+    """获取信誉系统中总用户数"""
+    try:
+        async with db_pool.acquire() as conn:
+            # 统计 ratings 表中的行数
+            return await conn.fetchval("SELECT COUNT(*) FROM ratings") or 0
+    except Exception as e:
+        print(f"Database Error in get_total_users: {e}")
+        return 0
+
+async def get_total_votes():
+    """获取总投票记录数"""
+    try:
+        async with db_pool.acquire() as conn:
+            # 统计 votes 表中的行数
+            return await conn.fetchval("SELECT COUNT(*) FROM votes") or 0
+    except Exception as e:
+        print(f"Database Error in get_total_votes: {e}")
+        return 0
