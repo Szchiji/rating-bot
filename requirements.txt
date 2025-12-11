@@ -3,4 +3,4 @@ gunicorn
 aiogram
 asyncpg
 asgiref
-uvicorn  # <--- 新增
+uvicorn
