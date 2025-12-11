@@ -167,4 +167,4 @@ async def set_welcome_message(text: str):
     """设置欢迎消息"""
     async with db_pool.acquire() as conn:
         await conn.execute("INSERT INTO bot_settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value", 
-                           'welcome', text)
+                           'welcome', text) 
