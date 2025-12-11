@@ -3,7 +3,7 @@ import os
 import asyncio
 import database
 from functools import wraps
-from asgiref.wsgi import WsgiToAsgi # 用于异步支持
+from asgiref.wsgi import WsgiToAsgi # <--- 新增导入
 
 app = Flask(__name__)
 # 确保 SECRET_KEY 是随机的
@@ -12,11 +12,8 @@ app.secret_key = os.environ.get("SECRET_KEY", "WOLF_HUNTER_SECURE_KEY_RANDOM")
 OWNER_ID = os.environ.get("OWNER_ID")
 OWNER_PASSWORD = os.environ.get("OWNER_PASSWORD")
 
-# 确保数据库连接池在 Web 应用启动前初始化一次
-try:
-    asyncio.run(database.init_schema())
-except Exception as e:
-    print(f"FATAL: Database initialization failed during Web startup: {e}")
+# ⚠️ 关键修复：移除在应用加载时阻塞的 asyncio.run(database.init_schema())。
+# 我们依赖 bot.py 在后台启动时完成数据库初始化。
 
 # --- 装饰器：管理员权限检查 ---
 def login_required(f):
@@ -30,6 +27,7 @@ def login_required(f):
 # --- 首页路由（新增密码登录和设置链接） ---
 @app.route("/", methods=["GET", "POST"])
 def home():
+    # ... (登录验证逻辑和返回首页 HTML 保持不变) ...
     if request.method == "POST":
         input_id = request.form.get("id")
         input_pass = request.form.get("password")
@@ -81,7 +79,7 @@ def home():
     </div>
     '''
 
-# --- 新增：群组设置页面 ---
+# --- 新增：群组设置页面 (异步路由) ---
 @app.route("/settings", methods=["GET", "POST"])
 @login_required
 async def group_settings():
@@ -91,6 +89,7 @@ async def group_settings():
         channel_id = request.form.get("cid", 0)
         
         try:
+            # 异步操作数据库
             async with database.db_pool.acquire() as conn:
                  await conn.execute("""
                     INSERT INTO database.chat_settings (chat_id, min_join_days, force_channel_id) 
@@ -126,7 +125,7 @@ async def group_settings():
     html += "</table>"
     return html
 
-# --- 授权群列表 ---
+# --- 授权群列表 (异步路由) ---
 @app.route("/groups")
 @login_required
 async def groups_list():
@@ -136,7 +135,7 @@ async def groups_list():
     return "<h3>已授权群列表</h3>" + "<br>".join(map(str, g)) or "暂无数据"
 
 
-# --- 封禁列表与解禁（Web 路由） ---
+# --- 封禁列表与解禁（异步路由） ---
 @app.route("/banned")
 @login_required
 async def banned_list():
@@ -166,7 +165,7 @@ async def unban_user_route():
     except Exception as e:
         return f"解禁失败: {e}", 500
 
-# --- 封禁和清理操作（Web 路由） ---
+# --- 封禁和清理操作（异步路由） ---
 @app.route("/ban_user", methods=["POST"])
 @login_required
 async def ban_user_route():
@@ -195,6 +194,11 @@ def logout():
     session.clear()
     return redirect("/")
 
+# 包装 Flask 应用为 ASGI 应用，以支持异步路由 (async def)
+# Flask 是 WSGI (同步) 应用，但现在有了异步路由，所以需要 ASGI 兼容层。
+app = WsgiToAsgi(app)
+
 # 确保 gunicorn 可以调用 Flask 应用
 if __name__ == "__main__":
+    # 仅在本地测试时运行此代码，部署时由 gunicorn 负责
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
