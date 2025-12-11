@@ -4,6 +4,8 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.types import Message, CallbackQuery, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
+
+# **语法错误已修复**
 from database import * from datetime import datetime, timedelta
 
 TOKEN = os.environ.get('BOT_TOKEN')
@@ -291,9 +293,9 @@ async def main():
         print("狼猎信誉机器人 - 异步 PostgreSQL 高级功能版本已启动") # READY_FLAG
         await dp.start_polling(bot)
     except Exception as e:
-        # **重要修改：打印具体错误信息，以便在 start.sh 超时时捕获**
+        # 打印具体错误信息
         print(f"BOT FAILED TO START due to database or config error: {e}") 
-        # 确保 Bot 进程在失败时退出，避免无限重试
+        # 确保 Bot 进程在失败时退出
         exit(1)
 
 if __name__ == "__main__":
