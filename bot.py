@@ -5,6 +5,7 @@ from aiogram.enums import ParseMode
 from aiogram.types import Message, CallbackQuery, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from database import * # <--- 引入所有异步数据库函数
+from datetime import datetime, timedelta
 
 TOKEN = os.environ.get('BOT_TOKEN')
 OWNER_ID = int(os.environ.get('OWNER_ID', '0'))
@@ -95,13 +96,11 @@ async def group(msg: Message):
         except: pass
 
     # 提取 @用户名
-    # 仅处理回复消息或提到 @user 的消息
     target_username = None
     if msg.reply_to_message and msg.reply_to_message.from_user:
         if msg.reply_to_message.from_user.username:
             target_username = msg.reply_to_message.from_user.username.lower()
     
-    # 如果回复的用户没有用户名，则检查文本中的 @
     if not target_username:
         for raw in PATTERN.findall(msg.text or ""):
             username = raw.lstrip("@").lower()
@@ -152,7 +151,6 @@ async def vote(cb: CallbackQuery):
             channel_id = settings['force_channel_id']
             member = await bot.get_chat_member(channel_id, voter_id)
             if member.status not in ['member', 'administrator', 'creator']:
-                # 尝试获取频道链接以引导用户
                 channel = await bot.get_chat(channel_id)
                 invite_link = channel.invite_link or f"https://t.me/{channel.username or channel_id}"
                 await cb.answer(f"⚠️ 使用机器人需先加入频道/群组：{invite_link}", show_alert=True)
@@ -160,16 +158,27 @@ async def vote(cb: CallbackQuery):
         except Exception as e: 
             print(f"Force Check Error: {e}"); 
 
-    # 5. 自定义投票门槛检查：最小入群时间 (简易实现)
+    # 5. 自定义投票门槛检查：最小入群时间 (精确检查)
     min_days = settings['min_join_days']
     if min_days > 0:
         try:
             member = await bot.get_chat_member(chat_id, voter_id)
-            if member.status not in ['administrator', 'creator']: 
-                 # 实际入群时间检查复杂，此处是简化检查
-                 await cb.answer(f"⚠️ 你的入群时间不足 {min_days} 天，无法投票。", show_alert=True)
-                 return
-        except: pass
+            
+            # 检查用户状态是否是普通成员
+            if member.status in ['member', 'restricted']: # restricted 也可以，只要不是管理员或创建者
+                # 获取入群时间
+                join_date = member.joined_at.replace(tzinfo=None) if member.joined_at else datetime.min
+                time_in_group = datetime.now() - join_date
+                
+                if time_in_group < timedelta(days=min_days):
+                    # 避免在 join_date 为 datetime.min 时显示负数天
+                    days_in_group = max(0, time_in_group.days)
+                    await cb.answer(f"⚠️ 你的入群时间不足 {min_days} 天，无法投票。已入群 {days_in_group} 天。", show_alert=True)
+                    return
+        except Exception as e: 
+            print(f"Join Days Check Error: {e}");
+            await cb.answer("入群时间检查失败，请稍后重试。", show_alert=True)
+            return
 
     # 6. 检查 24 小时投票限制 (使用 user_id)
     if not await can_vote(chat_id, voter_id, user_id, typ):
@@ -211,8 +220,28 @@ async def private_handler(msg: Message):
 
     elif text.startswith("/setforcechannel "):
         try:
-            _, chat_id, channel_id = text.split()
-            chat_id, channel_id = int(chat_id), int(channel_id)
+            parts = text.split()
+            _, chat_id, channel_link = parts[0], parts[1], parts[2]
+            chat_id = int(chat_id)
+            
+            # 尝试解析频道 ID
+            channel_id = None
+            if channel_link.startswith('@'):
+                channel_link = channel_link.lstrip('@')
+            
+            try:
+                # 尝试通过 @name 获取 ID
+                chat_info = await bot.get_chat(channel_link)
+                channel_id = chat_info.id
+            except:
+                try: 
+                    # 尝试解析为数字 ID
+                    channel_id = int(channel_link)
+                except: pass
+            
+            if not channel_id:
+                 await msg.reply("❌ 无法解析频道/群组 ID 或链接无效。")
+                 return
             
             async with db_pool.acquire() as conn:
                 await conn.execute("""
@@ -220,8 +249,8 @@ async def private_handler(msg: Message):
                     ON CONFLICT (chat_id) DO UPDATE SET force_channel_id = $2
                 """, chat_id, channel_id)
                 
-            await msg.reply(f"✅ 群组 {chat_id} 强制关注设置为：频道/群 {channel_id}。")
-        except: await msg.reply("用法: /setforcechannel [群ID] [频道/群ID] (例如: /setforcechannel -100xxx -100yyy)")
+            await msg.reply(f"✅ 群组 {chat_id} 强制关注设置为：频道/群 {channel_id} (<code>{channel_link}</code>)。")
+        except: await msg.reply("用法: /setforcechannel [群ID] [频道/群ID/@链接] (例如: /setforcechannel -100xxx @channelname)")
         
     elif text.startswith("/add "):
         try:
@@ -242,9 +271,8 @@ async def private_handler(msg: Message):
     elif text.startswith("/banuser "):
         try:
             u = text.split(maxsplit=1)[1].lstrip("@").lower()
-            # 需要通过用户名获取 ID
             uid = await get_user_id_by_username(u)
-            if not uid: await msg.reply("找不到用户ID"); return
+            if not uid: await msg.reply("❌ 找不到用户ID"); return
 
             await ban_user(uid, u)
             
@@ -259,16 +287,19 @@ async def private_handler(msg: Message):
     elif text.startswith("/clearuser "):
         try:
             u = text.split(maxsplit=1)[1].lstrip("@").lower()
-            # 需要通过用户名获取 ID
             uid = await get_user_id_by_username(u)
-            if not uid: await msg.reply("找不到用户ID"); return
+            if not uid: await msg.reply("❌ 找不到用户ID"); return
 
             await clear_user_data(uid)
             await msg.reply(f"🧹 已清理 @{u} (ID: {uid}) 所有记录")
         except: await msg.reply("用法: /clearuser @name")
         
     elif text.startswith("/setwelcome "):
-        new_text = text[len("/setwelcome "):]
+        new_text = text[len("/setwelcome "):].strip()
+        if not new_text:
+            await msg.reply("⚠️ 请提供欢迎词内容。")
+            return
+            
         await set_welcome_message(new_text)
         await msg.reply(f"📝 欢迎词已更新！\n\n预览：\n{new_text}")
 
@@ -276,12 +307,14 @@ async def private_handler(msg: Message):
         await msg.reply("<b>管理面板:</b>\n/add /del : 授权群管理\n/banuser /clearuser : 用户操作\n/setwelcome : 修改欢迎词\n/setjoindays /setforcechannel : 设置群组门槛")
 
 async def main():
-    # 确保异步连接池已初始化
-    await init_schema()
-    await load_configs() # 加载配置
-    # 关键信息：供 start.sh 检查
-    print("狼猎信誉机器人 - 异步 PostgreSQL 高级功能版本已启动") 
-    await dp.start_polling(bot)
+    try:
+        await init_schema()
+        await load_configs() 
+        print("狼猎信誉机器人 - 异步 PostgreSQL 高级功能版本已启动") 
+        await dp.start_polling(bot)
+    except Exception as e:
+        print(f"BOT FAILED TO START due to database or config error: {e}")
+        exit(1)
 
 if __name__ == "__main__":
     asyncio.run(main())
