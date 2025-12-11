@@ -5,11 +5,23 @@ from aiogram.enums import ParseMode
 from aiogram.types import Message, CallbackQuery, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-# **语法错误已修复**
+# **语法错误已修复，导入语句现在是正确的两行**
 from database import * from datetime import datetime, timedelta
 
 TOKEN = os.environ.get('BOT_TOKEN')
 OWNER_ID = int(os.environ.get('OWNER_ID', '0'))
+
+# --- DEBUG: 临时调试代码，用于检查环境变量是否被正确加载 ---
+import sys
+import platform
+print("-" * 50)
+print(f"DEBUG: Python Version: {platform.python_version()}")
+print(f"DEBUG: OS/Platform: {sys.platform}")
+print(f"DEBUG: OWNER_ID: {OWNER_ID}")
+print(f"DEBUG: DATABASE_URL is set: {bool(os.environ.get('DATABASE_URL'))}")
+print(f"DEBUG: BOT_TOKEN is set: {bool(TOKEN)}")
+print("-" * 50)
+# --- DEBUG 结束 ---
 
 bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
