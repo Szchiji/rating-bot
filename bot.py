@@ -15,10 +15,9 @@ dp = Dispatcher()
 router = Router()
 dp.include_router(router)
 
-# PATTERN 仍然用于提取用户名
 PATTERN = re.compile(r"@?([\w\u4e00-\u9fa5]{2,32})")
 LAST_CARD_MSG_ID = {}
-ALLOWED_CHAT_IDS = set() # 运行时缓存
+ALLOWED_CHAT_IDS = set() 
 ADMIN_IDS = set()
 
 # --- 辅助函数 ---
@@ -26,7 +25,6 @@ ADMIN_IDS = set()
 async def get_user_id_by_username(username: str):
     """尝试通过用户名获取用户的 ID"""
     try:
-        # 使用 bot.get_chat 尝试解析用户名
         user_obj = await bot.get_chat(username)
         return user_obj.id
     except: 
@@ -46,7 +44,6 @@ async def send_card(chat_id: int, username: str, user_id: int, r: int, b: int, n
     elif net >= -5: color = "Orange"; medal = ""
     else: color = "Red"; medal = "☠️"
     
-    # 修复：当 user_id 获取失败时，显示友好的提示
     user_id_text = f"<code>{user_id}</code>" if user_id else "获取失败/未知"
     
     text = f"{medal}<b>{color} @{username}</b>{medal}\n"
@@ -59,7 +56,6 @@ async def send_card(chat_id: int, username: str, user_id: int, r: int, b: int, n
 def kb(username: str, user_id: int):
     """键盘回调数据改为绑定 user_id"""
     b = InlineKeyboardBuilder()
-    # 只有当 user_id 存在时，才允许投票
     if user_id:
         b.row(InlineKeyboardButton(text="推荐", callback_data=f"rec_{user_id}_{username}"),
               InlineKeyboardButton(text="拉黑", callback_data=f"black_{user_id}_{username}"))
@@ -69,11 +65,9 @@ async def load_configs():
     """从数据库加载并缓存允许的群组和管理员"""
     global ALLOWED_CHAT_IDS, ADMIN_IDS
     try:
-        # 加载群组
         chats = await get_allowed_chats()
         ALLOWED_CHAT_IDS = {c['chat_id'] for c in chats}
         
-        # 加载管理员
         ADMIN_IDS = await load_admins()
         if OWNER_ID and OWNER_ID not in ADMIN_IDS:
             ADMIN_IDS.add(OWNER_ID)
@@ -87,7 +81,6 @@ async def load_configs():
 async def group(msg: Message):
     if msg.chat.id not in ALLOWED_CHAT_IDS: return
 
-    # 异步检查发送者是否在黑名单 (使用 user_id)
     if msg.from_user.id and await is_banned(msg.from_user.id):
         try:
             await bot.ban_chat_member(msg.chat.id, msg.from_user.id)
@@ -95,7 +88,6 @@ async def group(msg: Message):
             return
         except: pass
 
-    # 提取 @用户名
     target_username = None
     if msg.reply_to_message and msg.reply_to_message.from_user:
         if msg.reply_to_message.from_user.username:
@@ -112,11 +104,7 @@ async def group(msg: Message):
         return
 
     username = target_username
-    
-    # 核心：通过用户名查找 ID
     user_id = await get_user_id_by_username(username)
-    
-    # 异步获取统计
     r, b, _ = await get_stats(user_id)
     
     await send_card(msg.chat.id, username, user_id, r, b, r-b)
@@ -129,23 +117,20 @@ async def vote(cb: CallbackQuery):
     if chat_id not in ALLOWED_CHAT_IDS:
         await cb.answer("本群未授权", show_alert=True); return
         
-    # 1. 解析数据
     if len(cb.data.split('_')) != 3:
         await cb.answer("数据格式错误", show_alert=True); return
         
     typ, uid_str, username = cb.data.split("_")
     user_id = int(uid_str)
     
-    # 2. 检查回复消息（投票证据绑定）
     if not cb.message.reply_to_message:
         await cb.answer("请回复一条消息进行投票（作为证据）", show_alert=True); return
         
     evidence_msg_id = cb.message.reply_to_message.message_id
     
-    # 3. 获取群组设置 (门槛/强制关注)
     settings = await get_chat_settings(chat_id)
     
-    # 4. 强制关注/加入检查 (ToS/ToC)
+    # 强制关注/加入检查
     if settings['force_channel_id'] != 0:
         try:
             channel_id = settings['force_channel_id']
@@ -158,20 +143,17 @@ async def vote(cb: CallbackQuery):
         except Exception as e: 
             print(f"Force Check Error: {e}"); 
 
-    # 5. 自定义投票门槛检查：最小入群时间 (精确检查)
+    # 最小入群时间 (精确检查)
     min_days = settings['min_join_days']
     if min_days > 0:
         try:
             member = await bot.get_chat_member(chat_id, voter_id)
             
-            # 检查用户状态是否是普通成员
-            if member.status in ['member', 'restricted']: # restricted 也可以，只要不是管理员或创建者
-                # 获取入群时间
+            if member.status in ['member', 'restricted']: 
                 join_date = member.joined_at.replace(tzinfo=None) if member.joined_at else datetime.min
                 time_in_group = datetime.now() - join_date
                 
                 if time_in_group < timedelta(days=min_days):
-                    # 避免在 join_date 为 datetime.min 时显示负数天
                     days_in_group = max(0, time_in_group.days)
                     await cb.answer(f"⚠️ 你的入群时间不足 {min_days} 天，无法投票。已入群 {days_in_group} 天。", show_alert=True)
                     return
@@ -180,14 +162,14 @@ async def vote(cb: CallbackQuery):
             await cb.answer("入群时间检查失败，请稍后重试。", show_alert=True)
             return
 
-    # 6. 检查 24 小时投票限制 (使用 user_id)
+    # 检查 24 小时投票限制
     if not await can_vote(chat_id, voter_id, user_id, typ):
         await cb.answer("24h内只能投一次", show_alert=True); return
     
-    # 7. 异步添加投票，传入 evidence_msg_id
+    # 异步添加投票
     await add_vote(chat_id, voter_id, user_id, typ, username, evidence_msg_id)
     
-    # 8. 更新卡片
+    # 更新卡片
     r, b, _ = await get_stats(user_id)
     await delete_old(cb.message.chat.id)
     await send_card(cb.message.chat.id, username, user_id, r, b, r-b)
@@ -224,18 +206,15 @@ async def private_handler(msg: Message):
             _, chat_id, channel_link = parts[0], parts[1], parts[2]
             chat_id = int(chat_id)
             
-            # 尝试解析频道 ID
             channel_id = None
             if channel_link.startswith('@'):
                 channel_link = channel_link.lstrip('@')
             
             try:
-                # 尝试通过 @name 获取 ID
                 chat_info = await bot.get_chat(channel_link)
                 channel_id = chat_info.id
             except:
                 try: 
-                    # 尝试解析为数字 ID
                     channel_id = int(channel_link)
                 except: pass
             
@@ -256,7 +235,7 @@ async def private_handler(msg: Message):
         try:
             gid = int(text.split()[1])
             await save_group(gid)
-            await load_configs() # 重新加载群组
+            await load_configs() 
             await msg.reply(f"✅ 已授权: {gid}")
         except: await msg.reply("用法: /add -100xxx")
     
@@ -264,7 +243,7 @@ async def private_handler(msg: Message):
         try:
             gid = int(text.split()[1])
             await del_group(gid)
-            await load_configs() # 重新加载群组
+            await load_configs() 
             await msg.reply(f"🗑️ 已删除: {gid}")
         except: await msg.reply("用法: /del -100xxx")
 
