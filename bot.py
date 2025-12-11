@@ -18,12 +18,14 @@ dp.include_router(router)
 PATTERN = re.compile(r"@?([\w\u4e00-\u9fa5]{2,32})")
 LAST_CARD_MSG_ID = {}
 ALLOWED_CHAT_IDS = set() # 运行时缓存
+ADMIN_IDS = set()
 
 # --- 辅助函数 ---
 
 async def get_user_id_by_username(username: str):
     """尝试通过用户名获取用户的 ID"""
     try:
+        # 使用 bot.get_chat 尝试解析用户名
         user_obj = await bot.get_chat(username)
         return user_obj.id
     except: 
@@ -57,14 +59,22 @@ def kb(username: str, user_id: int):
           InlineKeyboardButton(text="拉黑", callback_data=f"black_{user_id}_{username}"))
     return b.as_markup()
 
-async def load_allowed_chats():
-    """从数据库加载并缓存允许的群组 ID"""
-    global ALLOWED_CHAT_IDS
+async def load_configs():
+    """从数据库加载并缓存允许的群组和管理员"""
+    global ALLOWED_CHAT_IDS, ADMIN_IDS
     try:
+        # 加载群组
         chats = await get_allowed_chats()
         ALLOWED_CHAT_IDS = {c['chat_id'] for c in chats}
+        
+        # 加载管理员
+        ADMIN_IDS = await load_admins()
+        if OWNER_ID and OWNER_ID not in ADMIN_IDS:
+            ADMIN_IDS.add(OWNER_ID)
+            await save_admin(OWNER_ID)
+            
     except Exception as e:
-        print(f"Error loading allowed chats: {e}")
+        print(f"Error loading configs: {e}")
 
 # === 群组消息处理：包含黑名单检查 ===
 @router.message(F.chat.type.in_({"group", "supergroup"}))
@@ -123,11 +133,14 @@ async def vote(cb: CallbackQuery):
             channel_id = settings['force_channel_id']
             member = await bot.get_chat_member(channel_id, voter_id)
             if member.status not in ['member', 'administrator', 'creator']:
+                # 尝试获取频道链接以引导用户
                 channel = await bot.get_chat(channel_id)
-                invite_link = channel.invite_link or f"https://t.me/{channel.username}"
+                invite_link = channel.invite_link or f"https://t.me/{channel.username or channel_id}"
                 await cb.answer(f"⚠️ 使用机器人需先加入频道/群组：{invite_link}", show_alert=True)
                 return
-        except: pass # 忽略 Bot 检查错误，避免阻塞
+        except Exception as e: 
+            # 记录错误，但继续执行，避免Bot权限不足时崩溃
+            print(f"Force Check Error: {e}"); 
 
     # 5. 自定义投票门槛检查：最小入群时间 (简易实现)
     min_days = settings['min_join_days']
@@ -136,6 +149,7 @@ async def vote(cb: CallbackQuery):
             member = await bot.get_chat_member(chat_id, voter_id)
             # 只有群主/管理员可以忽略门槛 (简化实现)
             if member.status not in ['administrator', 'creator']: 
+                 # 实际入群时间检查复杂，此处是简化检查
                  await cb.answer(f"⚠️ 你的入群时间不足 {min_days} 天，无法投票。", show_alert=True)
                  return
         except: pass
@@ -156,13 +170,13 @@ async def vote(cb: CallbackQuery):
 # === 私聊管理员面板：设置门槛和强制关注 ===
 @router.message(F.chat.type == "private")
 async def private_handler(msg: Message):
-    if msg.from_user.id != OWNER_ID: # 简化：只允许 OWNER_ID
-        # ... (获取欢迎词逻辑不变) ...
+    if msg.from_user.id not in ADMIN_IDS:
+        welcome_text = await get_welcome_message()
+        await msg.reply(welcome_text)
         return
 
     text = msg.text.strip()
     
-    # --- 新增设置命令 ---
     if text.startswith("/setjoindays "):
         try:
             _, chat_id, days = text.split()
@@ -191,17 +205,63 @@ async def private_handler(msg: Message):
                 
             await msg.reply(f"✅ 群组 {chat_id} 强制关注设置为：频道/群 {channel_id}。")
         except: await msg.reply("用法: /setforcechannel [群ID] [频道/群ID] (例如: /setforcechannel -100xxx -100yyy)")
-
-    # --- 其他管理命令 ---
-    # ... (其他命令如 /add, /del, /banuser, /clearuser 需调用 database.py 中的异步函数) ...
         
+    elif text.startswith("/add "):
+        try:
+            gid = int(text.split()[1])
+            await save_group(gid)
+            await load_configs() # 重新加载群组
+            await msg.reply(f"✅ 已授权: {gid}")
+        except: await msg.reply("用法: /add -100xxx")
+    
+    elif text.startswith("/del "):
+        try:
+            gid = int(text.split()[1])
+            await del_group(gid)
+            await load_configs() # 重新加载群组
+            await msg.reply(f"🗑️ 已删除: {gid}")
+        except: await msg.reply("用法: /del -100xxx")
+
+    elif text.startswith("/banuser "):
+        try:
+            u = text.split(maxsplit=1)[1].lstrip("@").lower()
+            # 需要通过用户名获取 ID
+            uid = await get_user_id_by_username(u)
+            if not uid: await msg.reply("找不到用户ID"); return
+
+            await ban_user(uid, u)
+            
+            count = 0
+            for gid in ALLOWED_CHAT_IDS:
+                try: await bot.ban_chat_member(gid, uid); count += 1
+                except: pass
+            
+            await msg.reply(f"🚫 已拉黑 @{u} (ID: {uid}) (在 {count} 个群执行踢出)")
+        except: await msg.reply("用法: /banuser @name")
+    
+    elif text.startswith("/clearuser "):
+        try:
+            u = text.split(maxsplit=1)[1].lstrip("@").lower()
+            # 需要通过用户名获取 ID
+            uid = await get_user_id_by_username(u)
+            if not uid: await msg.reply("找不到用户ID"); return
+
+            await clear_user_data(uid)
+            await msg.reply(f"🧹 已清理 @{u} (ID: {uid}) 所有记录")
+        except: await msg.reply("用法: /clearuser @name")
+        
+    elif text.startswith("/setwelcome "):
+        new_text = text[len("/setwelcome "):]
+        await set_welcome_message(new_text)
+        await msg.reply(f"📝 欢迎词已更新！\n\n预览：\n{new_text}")
+
     elif text in ["/start", "/help"]:
         await msg.reply("<b>管理面板:</b>\n/add /del : 授权群管理\n/banuser /clearuser : 用户操作\n/setwelcome : 修改欢迎词\n/setjoindays /setforcechannel : 设置群组门槛")
 
 async def main():
     # 确保异步连接池已初始化
     await init_schema()
-    await load_allowed_chats() # 加载允许的群组列表
+    await load_configs() # 加载配置
     print("狼猎信誉机器人 - 异步 PostgreSQL 高级功能版本已启动")
     await dp.start_polling(bot)
 
