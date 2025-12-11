@@ -16,7 +16,7 @@ async def init_db_pool():
         raise ValueError("DATABASE_URL environment variable is not set!")
     
     try:
-        # **重要修复点：添加 ssl='disable' 尝试解决云数据库的 SSL/TLS 连接问题**
+        # **保留 ssl='disable' 尝试解决云数据库的 SSL/TLS 连接问题**
         db_pool = await asyncpg.create_pool(DATABASE_URL, ssl='disable')
         print("Database connection pool successfully initialized.")
     except Exception as e:
