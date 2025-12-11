@@ -45,8 +45,11 @@ async def send_card(chat_id: int, username: str, user_id: int, r: int, b: int, n
     elif net >= -5: color = "Orange"; medal = ""
     else: color = "Red"; medal = "☠️"
     
+    # 修复：当 user_id 获取失败时，显示友好的提示
+    user_id_text = f"<code>{user_id}</code>" if user_id else "获取失败/未知"
+    
     text = f"{medal}<b>{color} @{username}</b>{medal}\n"
-    text += f"用户 ID: <code>{user_id}</code>\n\n"
+    text += f"用户 ID: {user_id_text}\n\n"
     text += f"推荐 <b>{r}</b>　拉黑 <b>{b}</b>\n净值 <b>{net:+d}</b>"
     
     sent = await bot.send_message(chat_id, text, reply_markup=kb(username, user_id))
@@ -55,8 +58,10 @@ async def send_card(chat_id: int, username: str, user_id: int, r: int, b: int, n
 def kb(username: str, user_id: int):
     """键盘回调数据改为绑定 user_id"""
     b = InlineKeyboardBuilder()
-    b.row(InlineKeyboardButton(text="推荐", callback_data=f"rec_{user_id}_{username}"),
-          InlineKeyboardButton(text="拉黑", callback_data=f"black_{user_id}_{username}"))
+    # 只有当 user_id 存在时，才允许投票
+    if user_id:
+        b.row(InlineKeyboardButton(text="推荐", callback_data=f"rec_{user_id}_{username}"),
+              InlineKeyboardButton(text="拉黑", callback_data=f"black_{user_id}_{username}"))
     return b.as_markup()
 
 async def load_configs():
@@ -90,18 +95,32 @@ async def group(msg: Message):
         except: pass
 
     # 提取 @用户名
-    for raw in PATTERN.findall(msg.text)[:3]:
-        username = raw.lstrip("@").lower()
-        if len(username) < 3 or username.isdigit(): continue
-        
-        # 核心：通过用户名查找 ID
-        user_id = await get_user_id_by_username(username)
-        if not user_id: continue 
-        
-        # 异步获取统计
-        r, b, _ = await get_stats(user_id)
-        
-        await send_card(msg.chat.id, username, user_id, r, b, r-b)
+    # 仅处理回复消息或提到 @user 的消息
+    target_username = None
+    if msg.reply_to_message and msg.reply_to_message.from_user:
+        if msg.reply_to_message.from_user.username:
+            target_username = msg.reply_to_message.from_user.username.lower()
+    
+    # 如果回复的用户没有用户名，则检查文本中的 @
+    if not target_username:
+        for raw in PATTERN.findall(msg.text or ""):
+            username = raw.lstrip("@").lower()
+            if len(username) >= 3 and not username.isdigit():
+                target_username = username
+                break
+    
+    if not target_username:
+        return
+
+    username = target_username
+    
+    # 核心：通过用户名查找 ID
+    user_id = await get_user_id_by_username(username)
+    
+    # 异步获取统计
+    r, b, _ = await get_stats(user_id)
+    
+    await send_card(msg.chat.id, username, user_id, r, b, r-b)
 
 @router.callback_query()
 async def vote(cb: CallbackQuery):
@@ -139,7 +158,6 @@ async def vote(cb: CallbackQuery):
                 await cb.answer(f"⚠️ 使用机器人需先加入频道/群组：{invite_link}", show_alert=True)
                 return
         except Exception as e: 
-            # 记录错误，但继续执行，避免Bot权限不足时崩溃
             print(f"Force Check Error: {e}"); 
 
     # 5. 自定义投票门槛检查：最小入群时间 (简易实现)
@@ -147,7 +165,6 @@ async def vote(cb: CallbackQuery):
     if min_days > 0:
         try:
             member = await bot.get_chat_member(chat_id, voter_id)
-            # 只有群主/管理员可以忽略门槛 (简化实现)
             if member.status not in ['administrator', 'creator']: 
                  # 实际入群时间检查复杂，此处是简化检查
                  await cb.answer(f"⚠️ 你的入群时间不足 {min_days} 天，无法投票。", show_alert=True)
@@ -262,7 +279,8 @@ async def main():
     # 确保异步连接池已初始化
     await init_schema()
     await load_configs() # 加载配置
-    print("狼猎信誉机器人 - 异步 PostgreSQL 高级功能版本已启动")
+    # 关键信息：供 start.sh 检查
+    print("狼猎信誉机器人 - 异步 PostgreSQL 高级功能版本已启动") 
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
