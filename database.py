@@ -16,20 +16,17 @@ async def init_db_pool():
         raise ValueError("DATABASE_URL environment variable is not set!")
     
     try:
-        # 异步创建连接池，如果连接失败，这里会抛出异常
         db_pool = await asyncpg.create_pool(DATABASE_URL)
         print("Database connection pool successfully initialized.")
     except Exception as e:
-        # 关键：连接失败时抛出异常，让 bot.py 捕获并退出
         print(f"FATAL ERROR: Could not connect to database: {e}")
         raise
 
 async def init_schema():
-    """初始化数据库表结构，新增 votes.evidence_msg_id 和 chat_settings 表"""
+    """初始化数据库表结构 (已包含 banned_users 的 time 字段)"""
     await init_db_pool()
 
     async with db_pool.acquire() as conn:
-        # 使用事务和批量执行创建表
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS ratings (
                 user_id BIGINT PRIMARY KEY,
@@ -44,24 +41,29 @@ async def init_schema():
                 target_id BIGINT NOT NULL,
                 type VARCHAR(10) NOT NULL,
                 time TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-                evidence_msg_id BIGINT,              -- 新增：投票证据消息 ID
+                evidence_msg_id BIGINT,              
                 PRIMARY KEY(chat_id, voter_id, target_id, type)
             );
             
             CREATE TABLE IF NOT EXISTS admins (user_id BIGINT PRIMARY KEY);
             CREATE TABLE IF NOT EXISTS allowed_chats (chat_id BIGINT PRIMARY KEY);
-            CREATE TABLE IF NOT EXISTS banned_users (user_id BIGINT PRIMARY KEY, username VARCHAR(32));
+            
+            -- IMPORTANT: banned_users 增加了 time 字段支持 Web UI
+            CREATE TABLE IF NOT EXISTS banned_users (
+                user_id BIGINT PRIMARY KEY, 
+                username VARCHAR(32),
+                time TIMESTAMP WITH TIME ZONE DEFAULT NOW() 
+            ); 
+            
             CREATE TABLE IF NOT EXISTS bot_settings (key VARCHAR(50) PRIMARY KEY, value TEXT);
             
-            -- 新增：群组设置表
             CREATE TABLE IF NOT EXISTS chat_settings (
                 chat_id BIGINT PRIMARY KEY,
-                min_join_days INTEGER DEFAULT 0,    -- 最小入群天数门槛
-                force_channel_id BIGINT DEFAULT 0   -- 强制关注的频道/群组 ID
+                min_join_days INTEGER DEFAULT 0,    
+                force_channel_id BIGINT DEFAULT 0   
             );
         ''')
         
-        # 插入或忽略欢迎词
         await conn.execute("""
             INSERT INTO bot_settings (key, value) VALUES ($1, $2) 
             ON CONFLICT (key) DO NOTHING
@@ -80,13 +82,11 @@ async def add_vote(chat_id: int, voter_id: int, target_id: int, typ: str, userna
     async with db_pool.acquire() as conn:
         col = "rec" if typ == "rec" else "black"
         
-        # 1. 更新 ratings 表 (UPSERT: user_id 必须存在)
         await conn.execute(f"""
             INSERT INTO ratings (user_id, username, {col}) VALUES ($1, $2, 1) 
             ON CONFLICT (user_id) DO UPDATE SET {col}=ratings.{col}+1, username=EXCLUDED.username
         """, target_id, username)
         
-        # 2. 插入 votes 记录
         await conn.execute(f"""
             INSERT INTO votes (chat_id, voter_id, target_id, type, time, evidence_msg_id) 
             VALUES ($1, $2, $3, $4, NOW(), $5) 
@@ -110,9 +110,14 @@ async def is_banned(user_id: int):
         return row is not None
 
 async def get_banned_list():
-    """获取所有被封禁的用户列表"""
-    async with db_pool.acquire() as conn:
-        return await conn.fetch("SELECT user_id, username FROM banned_users")
+    """获取所有被封禁的用户列表 (包含 time 字段，用于 Web UI)"""
+    try:
+        async with db_pool.acquire() as conn:
+            # 确保查询包含 time 字段
+            return await conn.fetch("SELECT user_id, username, time FROM banned_users")
+    except Exception as e:
+        print(f"Database Error in get_banned_list: {e}")
+        return []
 
 async def unban_user(user_id: int):
     """解禁用户"""
@@ -122,7 +127,8 @@ async def unban_user(user_id: int):
 async def ban_user(user_id: int, username: str):
     """封禁用户"""
     async with db_pool.acquire() as conn:
-        await conn.execute("INSERT INTO banned_users (user_id, username) VALUES ($1, $2) ON CONFLICT (user_id) DO UPDATE SET username=EXCLUDED.username", user_id, username)
+        # 确保插入时设置了 time=NOW()
+        await conn.execute("INSERT INTO banned_users (user_id, username, time) VALUES ($1, $2, NOW()) ON CONFLICT (user_id) DO UPDATE SET username=EXCLUDED.username, time=NOW()", user_id, username)
 
 async def clear_user_data(user_id: int):
     """清除用户所有记录"""
@@ -131,11 +137,19 @@ async def clear_user_data(user_id: int):
         await conn.execute("DELETE FROM votes WHERE target_id = $1 OR voter_id = $1", user_id)
 
 async def get_chat_settings(chat_id: int):
-    """获取群组设置，用于投票门槛和强制关注"""
+    """获取群组设置，用于投票门槛和强制关注 (Bot 使用)"""
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow("SELECT min_join_days, force_channel_id FROM chat_settings WHERE chat_id = $1", chat_id)
-        # 返回默认值 0 (无门槛/无强制)
         return row if row else {'min_join_days': 0, 'force_channel_id': 0}
+
+async def get_chat_settings_list():
+    """获取所有群组设置列表 (用于 Web UI)"""
+    try:
+        async with db_pool.acquire() as conn:
+            return await conn.fetch("SELECT chat_id, min_join_days, force_channel_id FROM chat_settings")
+    except Exception as e:
+        print(f"Database Error in get_chat_settings_list: {e}")
+        return []
 
 async def get_allowed_chats():
     """获取所有已授权的群组 ID"""
