@@ -3,7 +3,7 @@ import os
 import asyncio
 import database
 from functools import wraps
-from asgiref.wsgi import WsgiToAsgi # <--- 新增导入
+from asgiref.wsgi import WsgiToAsgi
 
 app = Flask(__name__)
 # 确保 SECRET_KEY 是随机的
@@ -12,8 +12,26 @@ app.secret_key = os.environ.get("SECRET_KEY", "WOLF_HUNTER_SECURE_KEY_RANDOM")
 OWNER_ID = os.environ.get("OWNER_ID")
 OWNER_PASSWORD = os.environ.get("OWNER_PASSWORD")
 
-# ⚠️ 关键修复：移除在应用加载时阻塞的 asyncio.run(database.init_schema())。
-# 我们依赖 bot.py 在后台启动时完成数据库初始化。
+# --- 辅助函数：强制运行异步代码 (解决 'coroutine' 错误) ---
+def run_async(coro):
+    """在一个同步线程中运行异步代码并返回结果"""
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        # 如果没有事件循环，创建一个
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+    # 如果事件循环已经在运行（常见于 Gunicorn Worker 线程），使用 run_coroutine_threadsafe
+    if loop.is_running():
+        # 将任务提交到主循环（由 Uvicorn Worker 维护）
+        future = asyncio.run_coroutine_threadsafe(coro, loop)
+        # 等待结果，这会阻塞当前 Worker 线程，但解决了 coroutine 错误
+        return future.result()
+    else:
+        # 否则，运行新的事件循环
+        return loop.run_until_complete(coro)
+# --- 辅助函数结束 ---
 
 # --- 装饰器：管理员权限检查 ---
 def login_required(f):
@@ -24,10 +42,9 @@ def login_required(f):
         return f(*args, **kwargs)
     return decorated_function
 
-# --- 首页路由（新增密码登录和设置链接） ---
+# --- 首页路由 (同步) ---
 @app.route("/", methods=["GET", "POST"])
 def home():
-    # ... (登录验证逻辑和返回首页 HTML 保持不变) ...
     if request.method == "POST":
         input_id = request.form.get("id")
         input_pass = request.form.get("password")
@@ -79,123 +96,145 @@ def home():
     </div>
     '''
 
-# --- 新增：群组设置页面 (异步路由) ---
+# --- 群组设置页面 (同步包装异步) ---
 @app.route("/settings", methods=["GET", "POST"])
 @login_required
-async def group_settings():
-    if request.method == "POST":
-        group_id = request.form.get("gid")
-        join_days = request.form.get("days", 0)
-        channel_id = request.form.get("cid", 0)
+def group_settings():
+    async def inner_logic():
+        if request.method == "POST":
+            group_id = request.form.get("gid")
+            join_days = request.form.get("days", 0)
+            channel_id = request.form.get("cid", 0)
+            
+            try:
+                async with database.db_pool.acquire() as conn:
+                     await conn.execute("""
+                        INSERT INTO database.chat_settings (chat_id, min_join_days, force_channel_id) 
+                        VALUES ($1, $2, $3)
+                        ON CONFLICT (chat_id) DO UPDATE SET 
+                        min_join_days = $2, force_channel_id = $3
+                    """, int(group_id), int(join_days), int(channel_id))
+                return redirect(url_for('group_settings'))
+            except Exception as e:
+                return f"保存失败: {e}", 500
+
+        # GET 请求：显示所有已授权群组的设置表单
+        # ⚠️ 注意：如果 db_pool 未初始化，这里会抛出异常，但在 start.sh 检查后，概率极低。
+        async with database.db_pool.acquire() as conn:
+            groups = await conn.fetch("SELECT chat_id FROM allowed_chats")
+            settings = await conn.fetch("SELECT chat_id, min_join_days, force_channel_id FROM chat_settings")
+            settings_map = {s['chat_id']: s for s in settings}
+
+        html = "<h3>⚙️ 群组设置与门槛</h3><p><a href='/'>返回首页</a></p>"
+        html += "<table border='1' style='width:100%;'><tr><th>群组 ID</th><th>入群天数门槛</th><th>强制关注 ID</th><th>操作</th></tr>"
         
-        try:
-            # 异步操作数据库
-            async with database.db_pool.acquire() as conn:
-                 await conn.execute("""
-                    INSERT INTO database.chat_settings (chat_id, min_join_days, force_channel_id) 
-                    VALUES ($1, $2, $3)
-                    ON CONFLICT (chat_id) DO UPDATE SET 
-                    min_join_days = $2, force_channel_id = $3
-                """, int(group_id), int(join_days), int(channel_id))
-            return redirect(url_for('group_settings'))
-        except Exception as e:
-            return f"保存失败: {e}", 500
+        for group in groups:
+            gid = group['chat_id']
+            s = settings_map.get(gid, {'min_join_days': 0, 'force_channel_id': 0})
+            
+            html += f"<form method='post'><tr>"
+            html += f"<td>{gid}<input type='hidden' name='gid' value='{gid}'></td>"
+            
+            html += f"<td><input type='number' name='days' value='{s['min_join_days']}' style='width:80px;'> 天</td>"
+            html += f"<td><input type='number' name='cid' value='{s['force_channel_id']}' placeholder='频道/群ID' style='width:120px;'></td>"
+            html += f"<td><button>保存设置</button></td>"
+            html += "</tr></form>"
 
-    # GET 请求：显示所有已授权群组的设置表单
-    async with database.db_pool.acquire() as conn:
-        groups = await conn.fetch("SELECT chat_id FROM allowed_chats")
-        settings = await conn.fetch("SELECT chat_id, min_join_days, force_channel_id FROM chat_settings")
-        settings_map = {s['chat_id']: s for s in settings}
-
-    html = "<h3>⚙️ 群组设置与门槛</h3><p><a href='/'>返回首页</a></p>"
-    html += "<table border='1' style='width:100%;'><tr><th>群组 ID</th><th>入群天数门槛</th><th>强制关注 ID</th><th>操作</th></tr>"
-    
-    for group in groups:
-        gid = group['chat_id']
-        s = settings_map.get(gid, {'min_join_days': 0, 'force_channel_id': 0})
+        html += "</table>"
+        return html
         
-        html += f"<form method='post'><tr>"
-        html += f"<td>{gid}<input type='hidden' name='gid' value='{gid}'></td>"
-        
-        html += f"<td><input type='number' name='days' value='{s['min_join_days']}' style='width:80px;'> 天</td>"
-        html += f"<td><input type='number' name='cid' value='{s['force_channel_id']}' placeholder='频道/群ID' style='width:120px;'></td>"
-        html += f"<td><button>保存设置</button></td>"
-        html += "</tr></form>"
+    return run_async(inner_logic())
 
-    html += "</table>"
-    return html
 
-# --- 授权群列表 (异步路由) ---
+# --- 授权群列表 (同步包装异步) ---
 @app.route("/groups")
 @login_required
-async def groups_list():
-    async with database.db_pool.acquire() as conn:
-        groups = await conn.fetch("SELECT chat_id FROM allowed_chats")
-        g = [r['chat_id'] for r in groups]
-    return "<h3>已授权群列表</h3>" + "<br>".join(map(str, g)) or "暂无数据"
+def groups_list():
+    async def inner_logic():
+        async with database.db_pool.acquire() as conn:
+            groups = await conn.fetch("SELECT chat_id FROM allowed_chats")
+            g = [r['chat_id'] for r in groups]
+        return "<h3>已授权群列表</h3>" + "<br>".join(map(str, g)) or "暂无数据"
+        
+    return run_async(inner_logic())
 
 
-# --- 封禁列表与解禁（异步路由） ---
+# --- 封禁列表与解禁 (同步包装异步) ---
 @app.route("/banned")
 @login_required
-async def banned_list():
-    banned = await database.get_banned_list()
-    
-    html = "<h3>🚫 已封禁用户列表</h3>"
-    html += "<ul>"
-    
-    for user in banned:
-        html += f"<li>ID: <code>{user['user_id']}</code> (@{user['username'] or '无用户名'}) "
-        html += f"<form action='/unban_user' method='post' style='display:inline; margin-left:10px;'>"
-        html += f"<input type='hidden' name='uid' value='{user['user_id']}'>"
-        html += f"<button style='color:red; background:none; border:1px solid red; cursor:pointer;'>解禁</button>"
-        html += "</form></li>"
+def banned_list():
+    async def inner_logic():
+        banned = await database.get_banned_list()
         
-    html += "</ul><p><a href='/'>返回首页</a></p>"
-    return html
+        html = "<h3>🚫 已封禁用户列表</h3>"
+        html += "<ul>"
+        
+        for user in banned:
+            html += f"<li>ID: <code>{user['user_id']}</code> (@{user['username'] or '无用户名'}) "
+            html += f"<form action='/unban_user' method='post' style='display:inline; margin-left:10px;'>"
+            html += f"<input type='hidden' name='uid' value='{user['user_id']}'>"
+            html += f"<button style='color:red; background:none; border:1px solid red; cursor:pointer;'>解禁</button>"
+            html += "</form></li>"
+            
+        html += "</ul><p><a href='/'>返回首页</a></p>"
+        return html
+        
+    return run_async(inner_logic())
+
 
 @app.route("/unban_user", methods=["POST"])
 @login_required
-async def unban_user_route():
-    uid = request.form["uid"]
-    if not uid: return "请输入用户ID"
-    try:
-        await database.unban_user(int(uid))
-        return redirect("/banned")
-    except Exception as e:
-        return f"解禁失败: {e}", 500
+def unban_user_route():
+    async def inner_logic():
+        uid = request.form["uid"]
+        if not uid: return "请输入用户ID"
+        try:
+            await database.unban_user(int(uid))
+            return redirect("/banned")
+        except Exception as e:
+            return f"解禁失败: {e}", 500
+            
+    return run_async(inner_logic())
 
-# --- 封禁和清理操作（异步路由） ---
+
+# --- 封禁和清理操作 (同步包装异步) ---
 @app.route("/ban_user", methods=["POST"])
 @login_required
-async def ban_user_route():
-    uid = request.form["uid"]
-    uname = request.form.get("uname", None)
-    if not uid: return "请输入用户ID"
-    try:
-        await database.ban_user(int(uid), uname)
-        return f"<h3>已将 ID: {uid} 加入黑名单数据库</h3><a href='/'>返回</a>"
-    except Exception as e:
-        return f"封禁失败: {e}", 500
+def ban_user_route():
+    async def inner_logic():
+        uid = request.form["uid"]
+        uname = request.form.get("uname", None)
+        if not uid: return "请输入用户ID"
+        try:
+            await database.ban_user(int(uid), uname)
+            return f"<h3>已将 ID: {uid} 加入黑名单数据库</h3><a href='/'>返回</a>"
+        except Exception as e:
+            return f"封禁失败: {e}", 500
+            
+    return run_async(inner_logic())
+
 
 @app.route("/clear_data", methods=["POST"])
 @login_required
-async def clear_data_route():
-    uid = request.form["uid"]
-    if not uid: return "请输入用户ID"
-    try:
-        await database.clear_user_data(int(uid))
-        return f"<h3>已全局清理 ID: {uid} 的所有记录</h3><a href='/'>返回</a>"
-    except Exception as e:
-        return f"清理失败: {e}", 500
+def clear_data_route():
+    async def inner_logic():
+        uid = request.form["uid"]
+        if not uid: return "请输入用户ID"
+        try:
+            await database.clear_user_data(int(uid))
+            return f"<h3>已全局清理 ID: {uid} 的所有记录</h3><a href='/'>返回</a>"
+        except Exception as e:
+            return f"清理失败: {e}", 500
+            
+    return run_async(inner_logic())
+
 
 @app.route("/logout")
 def logout():
     session.clear()
     return redirect("/")
 
-# 包装 Flask 应用为 ASGI 应用，以支持异步路由 (async def)
-# Flask 是 WSGI (同步) 应用，但现在有了异步路由，所以需要 ASGI 兼容层。
+# 包装 Flask 应用为 ASGI 应用，以确保 Gunicorn Uvicorn Worker 兼容
 app = WsgiToAsgi(app)
 
 # 确保 gunicorn 可以调用 Flask 应用
