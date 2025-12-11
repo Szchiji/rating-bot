@@ -5,8 +5,10 @@ from aiogram.enums import ParseMode
 from aiogram.types import Message, CallbackQuery, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-# **关键修复：将错误的单行导入拆分成两行**
-from database import * from datetime import datetime, timedelta
+# **********************************************
+# ** 关键修复：将错误的单行导入拆分成两行 **
+from database import * from datetime import datetime, timedelta 
+# **********************************************
 
 TOKEN = os.environ.get('BOT_TOKEN')
 OWNER_ID = int(os.environ.get('OWNER_ID', '0'))
