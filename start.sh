@@ -33,4 +33,5 @@ fi
 # --- 3. 启动 Web 服务 (前台) ---
 echo "Starting Web Service using Uvicorn Worker..."
 # 使用 Uvicorn Worker 启动 Gunicorn，以兼容 WsgiToAsgi 包装后的异步 Web 路由
+# Uvicorn Worker 会自动处理多线程和事件循环问题。
 exec gunicorn --workers 4 --bind 0.0.0.0:$PORT --worker-class uvicorn.workers.UvicornWorker web:app
