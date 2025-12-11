@@ -13,45 +13,65 @@ app.secret_key = os.environ.get("SECRET_KEY", "WOLF_HUNTER_SECURE_KEY_RANDOM")
 OWNER_ID = os.environ.get("OWNER_ID")
 OWNER_PASSWORD = os.environ.get("OWNER_PASSWORD")
 
-# --- 基础 CSS 样式 (升级为后台管理系统风格) ---
+# --- 基础 CSS 样式 (增强版：加入数据卡片和人性化细节) ---
 BASE_CSS = """
 <style>
-    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f4f7f6; color: #333; margin: 0; display: flex; min-height: 100vh; }
-    #sidebar { width: 200px; background-color: #2c3e50; color: white; padding: 20px 0; box-shadow: 2px 0 5px rgba(0, 0, 0, 0.1); flex-shrink: 0; }
-    #sidebar a { display: block; padding: 10px 20px; text-decoration: none; color: #ecf0f1; border-left: 5px solid transparent; transition: all 0.2s; }
-    #sidebar a:hover, #sidebar a.active { background-color: #34495e; border-left: 5px solid #3498db; }
+    /* 基础布局 */
+    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #eef1f5; color: #333; margin: 0; display: flex; min-height: 100vh; }
+    #sidebar { width: 220px; background-color: #2c3e50; color: white; padding: 20px 0; box-shadow: 2px 0 10px rgba(0, 0, 0, 0.2); flex-shrink: 0; }
+    #sidebar a { display: flex; align-items: center; padding: 12px 20px; text-decoration: none; color: #ecf0f1; border-left: 5px solid transparent; transition: all 0.2s; }
+    #sidebar a:hover, #sidebar a.active { background-color: #34495e; border-left: 5px solid #3498db; font-weight: bold; }
     #sidebar h3 { color: #ecf0f1; text-align: center; margin-bottom: 30px; }
 
     #content { flex-grow: 1; padding: 30px; }
-    .container { max-width: 1200px; margin: 0 auto; background: #fff; padding: 30px; border-radius: 8px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1); }
-    h1 { color: #2c3e50; border-bottom: 2px solid #3498db; padding-bottom: 10px; margin-bottom: 20px; }
-    h3 { color: #2980b9; margin-top: 0; margin-bottom: 20px; }
-    hr { border: 0; height: 1px; background-color: #eee; margin: 20px 0; }
+    .container { max-width: 1200px; margin: 0 auto; background: #fff; padding: 30px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0, 0, 0, 0.05); }
+    h1 { color: #2c3e50; border-bottom: 2px solid #3498db; padding-bottom: 15px; margin-bottom: 30px; font-weight: 300; }
+    h3 { color: #2980b9; margin-top: 0; margin-bottom: 20px; border-bottom: 1px solid #f0f0f0; padding-bottom: 10px; }
     
-    .nav-top { text-align: right; margin-bottom: 20px; }
+    .nav-top { text-align: right; margin-bottom: 20px; font-size: 0.9em; }
     .nav-top a { text-decoration: none; color: #e74c3c; font-weight: bold; margin-left: 15px; }
 
-    input[type="text"], input[type="number"], input[type="password"] { padding: 10px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; }
-    button, .btn { padding: 10px 15px; background-color: #2ecc71; color: white; border: none; border-radius: 4px; cursor: pointer; transition: background-color 0.3s; text-decoration: none; display: inline-block;}
-    button:hover, .btn:hover { background-color: #27ae60; }
+    /* 表单和按钮 */
+    input[type="text"], input[type="number"], input[type="password"] { padding: 10px; border: 1px solid #ddd; border-radius: 6px; box-sizing: border-box; transition: border-color 0.3s; }
+    input:focus { border-color: #3498db; }
+    button, .btn { padding: 10px 18px; background-color: #2ecc71; color: white; border: none; border-radius: 6px; cursor: pointer; transition: background-color 0.3s, transform 0.1s; text-decoration: none; display: inline-block; font-weight: 500;}
+    button:hover, .btn:hover { background-color: #27ae60; transform: translateY(-1px); }
     .btn-primary { background-color: #3498db; }
     .btn-primary:hover { background-color: #2980b9; }
-    .btn-danger { background-color: #c0392b; }
-    .btn-danger:hover { background-color: #a93226; }
+    .btn-danger { background-color: #e74c3c; }
+    .btn-danger:hover { background-color: #c0392b; }
+    .btn-warning { background-color: #f39c12; }
+    .btn-warning:hover { background-color: #e67e22; }
     
-    .alert-success { background-color: #e6ffe6; color: #1a7c1a; padding: 10px; border-radius: 4px; margin-bottom: 15px; border-left: 5px solid #2ecc71; }
-    .alert-error { background-color: #ffe6e6; color: #cc0000; padding: 10px; border-radius: 4px; margin-bottom: 15px; border-left: 5px solid #cc0000; }
+    /* 警告信息 */
+    .alert-success { background-color: #e8f5e9; color: #388e3c; padding: 12px; border-radius: 6px; margin-bottom: 15px; border-left: 5px solid #2ecc71; }
+    .alert-error { background-color: #ffebee; color: #d32f2f; padding: 12px; border-radius: 6px; margin-bottom: 15px; border-left: 5px solid #e74c3c; }
     
-    table { width: 100%; border-collapse: collapse; margin-top: 15px; }
-    th, td { border: 1px solid #ddd; padding: 12px; text-align: left; }
-    th { background-color: #f2f2f2; }
+    /* 表格 */
+    table { width: 100%; border-collapse: separate; border-spacing: 0; margin-top: 15px; border-radius: 8px; overflow: hidden; box-shadow: 0 0 10px rgba(0,0,0,0.05); }
+    th, td { border-bottom: 1px solid #eee; padding: 15px; text-align: left; }
+    th { background-color: #f8f9fa; font-weight: 600; color: #555; }
+    tr:last-child td { border-bottom: none; }
+    tr:hover { background-color: #f5f5f5; }
     
-    .action-bar { display: flex; justify-content: space-between; margin-bottom: 20px; align-items: center; }
-    .form-inline > * { margin-right: 10px; }
+    /* 操作栏 */
+    .action-bar { display: flex; justify-content: space-between; margin-bottom: 25px; align-items: center; padding: 15px; background: #fcfcfc; border-radius: 8px; border: 1px solid #f0f0f0; }
+    .form-inline > * { margin-right: 15px; }
+
+    /* Dashboard 卡片样式 */
+    .card-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 20px; margin-top: 20px; }
+    .data-card { background: #fff; padding: 25px; border-radius: 10px; box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1); border-left: 5px solid #3498db; transition: transform 0.3s; }
+    .data-card:hover { transform: translateY(-5px); }
+    .card-title { color: #7f8c8d; font-size: 1em; margin-bottom: 10px; }
+    .card-value { font-size: 2.5em; font-weight: 700; color: #2c3e50; }
+    .card-icon { float: right; font-size: 2.5em; color: #bdc3c7; }
+
+    /* 登录页面样式 */
+    .login-container { max-width: 400px; margin: 100px auto; padding: 40px; background: #fff; border-radius: 10px; box-shadow: 0 8px 30px rgba(0, 0, 0, 0.1); }
 </style>
 """
 
-# --- 辅助函数：运行异步代码 (关键函数，确保 Web 异步操作正常) ---
+# --- 辅助函数：运行异步代码 (关键函数) ---
 def run_async(coro):
     """在一个同步线程中运行异步代码并返回结果"""
     try:
@@ -61,11 +81,9 @@ def run_async(coro):
         asyncio.set_event_loop(loop)
         
     if loop.is_running():
-        # 如果事件循环已经在运行，使用 run_coroutine_threadsafe
         future = asyncio.run_coroutine_threadsafe(coro, loop)
         return future.result()
     else:
-        # 否则，运行新的事件循环
         return loop.run_until_complete(coro)
 
 def flash(message, category):
@@ -90,15 +108,15 @@ def render_admin_page(title, content_html, active_nav):
     <meta name="viewport" content="width=device-width, initial-scale=1">
     {BASE_CSS}
     <div id="sidebar">
-        <h3>🐺 狼猎后台</h3>
-        <a href="/" class="{'active' if active_nav == 'home' else ''}">🏠 首页操作</a>
+        <h3>🐺 狼猎信誉系统</h3>
+        <a href="/" class="{'active' if active_nav == 'home' else ''}">📊 系统概览 (Dashboard)</a>
         <a href="/groups" class="{'active' if active_nav == 'groups' else ''}">👥 授权群管理</a>
-        <a href="/settings" class="{'active' if active_nav == 'settings' else ''}">⚙️ 群组设置</a>
-        <a href="/banned" class="{'active' if active_nav == 'banned' else ''}">🚫 封禁用户</a>
+        <a href="/settings" class="{'active' if active_nav == 'settings' else ''}">⚙️ 门槛/关注设置</a>
+        <a href="/banned" class="{'active' if active_nav == 'banned' else ''}">🚫 用户黑名单</a>
     </div>
     <div id="content">
         <div class="nav-top">
-            用户: {OWNER_ID} | <a href="/logout">退出</a>
+            管理员 ID: {OWNER_ID} | <a href="/logout">🚪 安全退出</a>
         </div>
         <div class="container">
             <h1>{title}</h1>
@@ -108,7 +126,7 @@ def render_admin_page(title, content_html, active_nav):
     </div>
     """
 
-# --- 首页路由 (Dashboard & 快速操作) ---
+# --- 首页路由 (Dashboard - 优化为统计视图) ---
 @app.route("/", methods=["GET", "POST"])
 def home():
     if request.method == "POST":
@@ -132,42 +150,60 @@ def home():
         <div class="login-container">
         <h2>狼猎信誉后台登录</h2>
         {flash_html}
-        <form method="post" style="padding:20px; border:1px solid #ccc; border-radius:5px;">
-          <input name="id" type="number" placeholder="输入 Owner ID" style="width: 100%; margin-bottom: 10px;">
-          <input name="password" type="password" placeholder="输入 Owner Password" style="width: 100%; margin-bottom: 20px;">
-          <button style="width: 100%; background-color: #3498db;">登录</button>
+        <form method="post">
+          <input name="id" type="number" placeholder="输入 Owner ID">
+          <input name="password" type="password" placeholder="输入 Owner Password">
+          <button style="width: 100%; background-color: #3498db;">🔑 登录系统</button>
         </form>
-        <p style="margin-top:20px; font-size:small;">请在 Railway 变量中设置 OWNER_PASSWORD</p>
+        <p style="margin-top:20px; font-size:small; text-align: center;">请在环境变量中设置 OWNER_PASSWORD</p>
         </div>
         '''
 
-    # 管理后台首页内容
-    content = f"""
-    <h3>功能操作面板</h3>
-    <hr>
-    
-    <div class="form-group">
-        <label>🚫 **封禁用户**</label>
-        <form action="/ban_user" method="post" class="form-inline">
-          <input name="uid" type="number" placeholder="输入用户 ID" style="width:150px;">
-          <input name="uname" placeholder="用户名 (可选)" style="width:150px;">
-          <button class="btn-danger">立即封禁</button>
-        </form>
-    </div>
-    
-    <div class="form-group">
-        <label>🧹 **清理数据**</label>
-        <form action="/clear_data" method="post" class="form-inline">
-          <input name="uid" type="number" placeholder="输入用户 ID" style="width:150px;">
-          <button class="btn-primary" style="background-color:#f39c12;">清理记录</button>
-        </form>
-    </div>
-    """
-    
-    return render_admin_page("🏠 首页操作面板", content, "home")
+    # 管理后台 Dashboard 内容
+    async def inner_logic():
+        if database.db_pool is None: await database.init_db_pool()
+        
+        # Dashboard 数据获取
+        total_groups = len(await database.get_allowed_chats())
+        total_banned = len(await database.get_banned_list())
+        total_users = await database.get_total_users()
+        total_votes = await database.get_total_votes()
+        
+        content = f"""
+        <h3>系统核心数据概览</h3>
+        
+        <div class="card-grid">
+            <div class="data-card" style="border-left-color: #1abc9c;">
+                <div class="card-icon">👥</div>
+                <div class="card-title">信誉系统总用户数</div>
+                <div class="card-value">{total_users:,}</div>
+            </div>
+            <div class="data-card" style="border-left-color: #3498db;">
+                <div class="card-icon">🗳️</div>
+                <div class="card-title">历史总投票记录数</div>
+                <div class="card-value">{total_votes:,}</div>
+            </div>
+            <div class="data-card" style="border-left-color: #f39c12;">
+                <div class="card-icon">💬</div>
+                <div class="card-title">已授权管理群组数</div>
+                <div class="card-value">{total_groups}</div>
+            </div>
+            <div class="data-card" style="border-left-color: #e74c3c;">
+                <div class="card-icon">❌</div>
+                <div class="card-title">当前黑名单用户数</div>
+                <div class="card-value">{total_banned}</div>
+            </div>
+        </div>
+        <hr>
+        
+        <p style="text-align: center; margin-top: 30px; color: #7f8c8d;">请使用左侧导航栏访问详细管理功能。</p>
+        """
+        return content
+
+    return render_admin_page("📊 狼猎信誉系统 Dashboard", run_async(inner_logic()), "home")
 
 
-# --- 1. 封禁列表管理 (/banned) ---
+# --- 1. 封禁列表管理 (/banned) --- (新增操作表单)
 @app.route("/banned", methods=["GET"])
 @login_required
 def banned_list():
@@ -194,20 +230,36 @@ def banned_list():
         if not isinstance(banned_data, list): banned_data = []
 
         content = f"""
-        <h3>封禁用户管理 ({len(banned_data)} 人)</h3>
+        <h3>🚫 用户黑名单管理 ({len(banned_data)} 人)</h3>
+        
+        <div class="action-bar" style="display: block;">
+            <div style="margin-bottom: 15px;">
+                <label style="font-weight: bold; color: #2c3e50;">🔍 搜索黑名单:</label>
+                <form action="/banned" method="get" class="form-inline" style="display: inline-flex;">
+                    <input type="text" name="search" placeholder="输入用户 ID 或用户名" value="{search_query}" style="width:250px;">
+                    <button type="submit" class="btn-primary">搜索</button>
+                    <a href="/banned" class="btn btn-warning" style="background-color: #95a5a6;">清空搜索</a>
+                </form>
+            </div>
 
-        <div class="action-bar">
-            <form action="/banned" method="get" class="form-inline">
-                <input type="text" name="search" placeholder="搜索用户 ID/用户名" value="{search_query}" style="width:200px;">
-                <button type="submit" class="btn-primary">搜索</button>
-            </form>
-            <a href="/" class="btn btn-danger">手动添加封禁</a>
+            <div style="padding-top: 15px; border-top: 1px dashed #eee;">
+                <label style="font-weight: bold; color: #2c3e50;">➕ 手动操作:</label>
+                <form action="/ban_user" method="post" class="form-inline" style="display: inline-flex; margin-right: 20px;">
+                    <input name="uid" type="number" placeholder="用户 ID" style="width:120px;">
+                    <input name="uname" placeholder="用户名 (选填)" style="width:120px;">
+                    <button class="btn-danger">加入黑名单</button>
+                </form>
+                <form action="/clear_data" method="post" class="form-inline" style="display: inline-flex;">
+                    <input name="uid" type="number" placeholder="输入用户 ID" style="width:120px;">
+                    <button class="btn-warning">🧹 清理信誉记录</button>
+                </form>
+            </div>
         </div>
         
         <table style="font-size: 0.9em;">
         <thead><tr>
             <th>用户 ID</th>
-            <th>用户名</th>
+            <th>用户名 (@)</th>
             <th>封禁时间</th>
             <th>状态</th>
             <th>操作</th>
@@ -220,7 +272,7 @@ def banned_list():
                 uid = user['user_id']
                 uname = user.get('username') or '无用户名'
                 ban_time = user.get('time')
-                time_str = ban_time.strftime('%Y-%m-%d %H:%M:%S') if ban_time else '未知'
+                time_str = ban_time.strftime('%Y-%m-%d %H:%M') if ban_time else '未知'
             except KeyError:
                 continue
             
@@ -229,23 +281,23 @@ def banned_list():
             <td><code>{uid}</code></td>
             <td>@{uname}</td>
             <td>{time_str}</td>
-            <td><span style="color: red; font-weight: bold;">已封禁</span></td>
+            <td><span style="color: #e74c3c; font-weight: bold;">已封禁</span></td>
             <td>
             <form action='/unban_user' method='post' style='display:inline;'>
             <input type='hidden' name='uid' value='{uid}'>
-            <button class="btn-primary" style='padding:5px 10px; font-size: 0.8em;'>解禁</button>
+            <button class="btn-primary" style='padding:5px 10px; font-size: 0.8em; background-color: #2ecc71;'>✅ 解禁</button>
             </form>
             </td>
             </tr>
             """
             
         if not banned_data:
-             content += '<tr><td colspan="5" style="text-align:center;">暂无封禁记录。</td></tr>'
+             content += '<tr><td colspan="5" style="text-align:center; color: #7f8c8d;">黑名单列表为空。</td></tr>'
 
         content += "</tbody></table>"
         return content
         
-    return render_admin_page("🚫 封禁用户管理", run_async(inner_logic()), "banned")
+    return render_admin_page("🚫 用户黑名单管理", run_async(inner_logic()), "banned")
 
 
 # --- 2. 授权群组管理 (/groups) ---
@@ -262,7 +314,7 @@ def groups_list():
                 try:
                     gid = int(gid_str)
                     await database.save_group(gid)
-                    flash(f"✅ 已授权群组 ID: <code>{gid}</code>", "success")
+                    flash(f"✅ 已成功授权群组 ID: <code>{gid}</code>。", "success")
                 except ValueError:
                     flash("❌ 群组 ID 必须是数字。", "error")
                 except Exception as e:
@@ -273,18 +325,19 @@ def groups_list():
         groups = await database.get_allowed_chats()
         
         content = f"""
-        <h3>已授权群组列表 ({len(groups)} 个)</h3>
+        <h3>👥 已授权群组列表 ({len(groups)} 个)</h3>
         
         <div class="action-bar">
             <form action="/groups" method="post" class="form-inline">
-                <input type="number" name="gid" placeholder="输入新的群组 ID" style="width:200px;">
+                <input type="text" name="gid" placeholder="输入新的群组 ID (-100xxxx)" style="width:250px;">
                 <button type="submit" class="btn-primary">+ 授权新群组</button>
             </form>
+            <p style="font-size: 0.9em; color: #7f8c8d;">群组 ID 通常以 -100 开头。</p>
         </div>
         
         <table style="font-size: 0.9em;">
         <thead><tr>
-            <th>群组 ID</th>
+            <th>群组 ID (Chat ID)</th>
             <th>操作</th>
         </tr></thead>
         <tbody>
@@ -296,17 +349,17 @@ def groups_list():
             <tr>
             <td><code>{gid}</code></td>
             <td>
-            <form action='/del_group_action' method='post' style='display:inline;'>
+            <form action='/del_group_action' method='post' style='display:inline; margin-right: 10px;'>
             <input type='hidden' name='gid' value='{gid}'>
-            <button class="btn-danger" style='padding:5px 10px; font-size: 0.8em;'>移除授权</button>
+            <button class="btn-danger" style='padding:5px 10px; font-size: 0.8em;'>🗑️ 移除授权</button>
             </form>
-            <a href="/settings?gid={gid}" class="btn-primary" style='padding:5px 10px; font-size: 0.8em; background-color:#1abc9c;'>设置门槛</a>
+            <a href="/settings?gid={gid}" class="btn-primary" style='padding:5px 10px; font-size: 0.8em; background-color:#1abc9c;'>⚙️ 调整设置</a>
             </td>
             </tr>
             """
         
         if not groups:
-             content += '<tr><td colspan="2" style="text-align:center;">暂无授权群组。</td></tr>'
+             content += '<tr><td colspan="2" style="text-align:center; color: #7f8c8d;">暂无授权群组。请添加群组 ID 开始管理。</td></tr>'
         
         content += "</tbody></table>"
         return content
@@ -347,14 +400,14 @@ def group_settings():
             channel_id = request.form.get("cid", 0)
             
             try:
+                # 检查强制关注 ID 格式
                 if str(channel_id).strip() and not str(channel_id).strip().startswith(('-', '1', '2', '3', '4', '5', '6', '7', '8', '9')):
-                    flash("⚠️ 强制关注ID必须是数字 ID！", "error")
+                    flash("⚠️ 强制关注 ID 必须是数字 ID！", "error")
                     return redirect(url_for('group_settings'))
 
                 async with database.db_pool.acquire() as conn:
-                     # 确保数据库操作是正确的
                      await conn.execute("""
-                        INSERT INTO database.chat_settings (chat_id, min_join_days, force_channel_id) 
+                        INSERT INTO chat_settings (chat_id, min_join_days, force_channel_id) 
                         VALUES ($1, $2, $3)
                         ON CONFLICT (chat_id) DO UPDATE SET 
                         min_join_days = $2, force_channel_id = $3
@@ -367,25 +420,19 @@ def group_settings():
 
         # 处理 GET 请求：显示所有已授权群组的设置表单
         groups = await database.get_allowed_chats()
-        # 假设 database.py 中新增了 get_chat_settings_list 函数
-        try:
-            settings = await database.get_chat_settings_list() 
-        except Exception as e:
-            flash(f"⚠️ 无法加载设置数据：请确保 database.py 中已添加 get_chat_settings_list 函数。{e}", "error")
-            settings = []
-            
+        settings = await database.get_chat_settings_list() 
         settings_map = {s['chat_id']: s for s in settings}
 
         content = f"""
-        <h3>群组投票门槛和强制关注设置</h3>
-        <p>群组 ID 为负数时代表超级群/频道。只有在 '授权群管理' 中添加的群组才会在这里列出。</p>
+        <h3>⚙️ 投票门槛和强制关注设置</h3>
+        <p style="color: #7f8c8d; margin-bottom: 20px;">以下表格集中管理所有已授权群组的投票限制。群 ID 为负数通常代表群组或频道。</p>
         
         <table style="font-size: 0.9em;">
         <thead><tr>
-            <th>群组 ID</th>
-            <th>入群天数门槛 (天)</th>
-            <th>强制关注 ID</th>
-            <th>操作</th>
+            <th style="width: 25%;">群组 ID (Chat ID)</th>
+            <th style="width: 25%;">入群天数门槛 (天)</th>
+            <th style="width: 30%;">强制关注 ID (Channel/Group ID)</th>
+            <th style="width: 20%;">操作</th>
         </tr></thead>
         <tbody>
         """
@@ -398,20 +445,21 @@ def group_settings():
             content += f"<td><code>{gid}</code><input type='hidden' name='gid' value='{gid}'></td>"
             
             content += f"<td><input type='number' name='days' value='{s['min_join_days']}' style='width:80px;'></td>"
-            content += f"<td><input type='text' name='cid' value='{s['force_channel_id']}' placeholder='频道/群ID (数字)' style='width:120px;'></td>"
-            content += f"<td><button class='btn-primary' style='padding:5px 10px; font-size: 0.8em;'>保存设置</button></td>"
+            content += f"<td><input type='text' name='cid' value='{s['force_channel_id']}' placeholder='数字 ID' style='width:120px;'></td>"
+            content += f"<td><button class='btn-primary' style='padding:8px 15px; font-size: 0.8em;'>💾 保存设置</button></td>"
             content += "</tr></form>"
 
         if not groups:
-             content += '<tr><td colspan="4" style="text-align:center;">请先在授权群管理中添加群组。</td></tr>'
+             content += '<tr><td colspan="4" style="text-align:center; color: #7f8c8d;">请先在“授权群管理”中添加群组。</td></tr>'
              
         content += "</tbody></table>"
         return content
         
-    return render_admin_page("⚙️ 群组设置管理", run_async(inner_logic()), "settings")
+    return render_admin_page("⚙️ 门槛/关注设置", run_async(inner_logic()), "settings")
 
 
-# --- 数据库操作路由 (保持不变) ---
+# --- 数据库操作路由 (保持不变，但重定向到新的 /banned 页面) ---
+
 @app.route("/ban_user", methods=["POST"])
 @login_required
 def ban_user_route():
@@ -421,14 +469,14 @@ def ban_user_route():
         uname = request.form.get("uname", None)
         if not uid: 
             flash("⚠️ 请输入用户ID。", "error")
-            return redirect("/")
+            return redirect("/banned")
         try:
             await database.ban_user(int(uid), uname)
             flash(f"🚫 已将 ID: <code>{uid}</code> 加入黑名单数据库。", "success")
-            return redirect("/")
+            return redirect("/banned")
         except Exception as e:
             flash(f"❌ 封禁失败: {e}", "error")
-            return redirect("/")
+            return redirect("/banned")
             
     return run_async(inner_logic())
 
@@ -440,14 +488,14 @@ def clear_data_route():
         uid = request.form["uid"]
         if not uid: 
             flash("⚠️ 请输入用户ID。", "error")
-            return redirect("/")
+            return redirect("/banned")
         try:
             await database.clear_user_data(int(uid))
-            flash(f"🧹 已全局清理 ID: <code>{uid}</code> 的所有记录。", "success")
-            return redirect("/")
+            flash(f"🧹 已全局清理 ID: <code>{uid}</code> 的所有信誉记录。", "success")
+            return redirect("/banned")
         except Exception as e:
             flash(f"❌ 清理失败: {e}", "error")
-            return redirect("/")
+            return redirect("/banned")
             
     return run_async(inner_logic())
 
