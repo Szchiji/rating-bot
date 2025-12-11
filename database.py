@@ -15,8 +15,14 @@ async def init_db_pool():
     if not DATABASE_URL:
         raise ValueError("DATABASE_URL environment variable is not set!")
     
-    # 异步创建连接池
-    db_pool = await asyncpg.create_pool(DATABASE_URL)
+    try:
+        # 异步创建连接池，如果连接失败，这里会抛出异常
+        db_pool = await asyncpg.create_pool(DATABASE_URL)
+        print("Database connection pool successfully initialized.")
+    except Exception as e:
+        # 关键：连接失败时抛出异常，让 bot.py 捕获并退出
+        print(f"FATAL ERROR: Could not connect to database: {e}")
+        raise
 
 async def init_schema():
     """初始化数据库表结构，新增 votes.evidence_msg_id 和 chat_settings 表"""
@@ -167,4 +173,4 @@ async def set_welcome_message(text: str):
     """设置欢迎消息"""
     async with db_pool.acquire() as conn:
         await conn.execute("INSERT INTO bot_settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value", 
-                           'welcome', text) 
+                           'welcome', text)
