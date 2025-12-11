@@ -7,7 +7,8 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 # **********************************************
 # ** 关键修复：将错误的单行导入拆分成两行 **
-from database import * from datetime import datetime, timedelta 
+from database import *
+from datetime import datetime, timedelta 
 # **********************************************
 
 TOKEN = os.environ.get('BOT_TOKEN')
@@ -22,6 +23,7 @@ print(f"DEBUG: OS/Platform: {sys.platform}")
 print(f"DEBUG: OWNER_ID: {OWNER_ID}")
 print(f"DEBUG: DATABASE_URL is set: {bool(os.environ.get('DATABASE_URL'))}")
 print(f"DEBUG: BOT_TOKEN is set: {bool(TOKEN)}")
+print("Bot process is attempting to connect to the database...")
 print("-" * 50)
 # --- DEBUG 结束 ---
 
@@ -35,10 +37,8 @@ LAST_CARD_MSG_ID = {}
 ALLOWED_CHAT_IDS = set() 
 ADMIN_IDS = set()
 
-# --- 辅助函数 ---
-
+# --- 辅助函数 (省略，与之前一致) ---
 async def get_user_id_by_username(username: str):
-    """尝试通过用户名获取用户的 ID"""
     try:
         user_obj = await bot.get_chat(username)
         return user_obj.id
@@ -69,7 +69,6 @@ async def send_card(chat_id: int, username: str, user_id: int, r: int, b: int, n
     LAST_CARD_MSG_ID[chat_id] = sent.message_id
 
 def kb(username: str, user_id: int):
-    """键盘回调数据改为绑定 user_id"""
     b = InlineKeyboardBuilder()
     if user_id:
         b.row(InlineKeyboardButton(text="推荐", callback_data=f"rec_{user_id}_{username}"),
@@ -77,7 +76,6 @@ def kb(username: str, user_id: int):
     return b.as_markup()
 
 async def load_configs():
-    """从数据库加载并缓存允许的群组和管理员"""
     global ALLOWED_CHAT_IDS, ADMIN_IDS
     try:
         chats = await get_allowed_chats()
@@ -91,7 +89,7 @@ async def load_configs():
     except Exception as e:
         print(f"Error loading configs: {e}")
 
-# === 群组消息处理：包含黑名单检查 ===
+# === 群组消息处理 (省略，与之前一致) ===
 @router.message(F.chat.type.in_({"group", "supergroup"}))
 async def group(msg: Message):
     if msg.chat.id not in ALLOWED_CHAT_IDS: return
@@ -190,7 +188,7 @@ async def vote(cb: CallbackQuery):
     await send_card(cb.message.chat.id, username, user_id, r, b, r-b)
     await cb.answer("投票成功，证据已记录")
 
-# === 私聊管理员面板：设置门槛和强制关注 ===
+# === 私聊管理员面板 (省略，与之前一致) ===
 @router.message(F.chat.type == "private")
 async def private_handler(msg: Message):
     if msg.from_user.id not in ADMIN_IDS:
