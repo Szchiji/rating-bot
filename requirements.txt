@@ -2,3 +2,5 @@ flask
 gunicorn
 aiogram
 asyncpg
+# 新增 asgiref 用于 Flask 异步路由封装
+asgiref
