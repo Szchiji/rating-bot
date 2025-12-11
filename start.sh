@@ -23,6 +23,7 @@ done
 
 if [ $COUNTER -eq $MAX_ATTEMPTS ]; then
     echo "FATAL: Bot failed to initialize database pool within 30 seconds."
+    echo "请检查 bot.log 以获取具体的数据库连接或配置错误。"
     echo "--- Bot Log Tail ---"
     tail -n 20 bot.log
     echo "----------------------"
